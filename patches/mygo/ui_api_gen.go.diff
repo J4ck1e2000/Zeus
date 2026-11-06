@@ -1,0 +1,22 @@
+--- a/ui/api_gen.go
++++ b/ui/api_gen.go
+@@ -2440,6 +2440,19 @@
+ 	return _node.Clicked()
+ }
+ 
++// MiddleClicked reports a click with the middle button, as closing a tab
++// with one.
++func (_handle Element) MiddleClicked() bool {
++	_node := _handle.node()
++	if _node == nil {
++		return false
++	}
++	_ctx := _node.c
++	_ = _ctx
++	_ctx.rt.applyInputs()
++	return _node.MiddleClicked()
++}
++
+ // Clicks returns how many times the element was clicked since the last
+ // frame.
+ func (_handle Element) Clicks() int {

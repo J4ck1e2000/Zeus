@@ -1,0 +1,44 @@
+# Local caches and application state
+.cache/
+
+# Generated builds and bundles
+/build/
+/.mygo/
+/Zeus
+/Zeus.exe
+*.app/
+*.dmg
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+mygo_windows_*.syso
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Editor and temporary files
+*.swp
+*.swo
+*~
+
+# Local environment files and private keys
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
+
+# Local development notes and design documents
+/.superpowers/
+/docs/superpowers/
+/docs/screenshot.png

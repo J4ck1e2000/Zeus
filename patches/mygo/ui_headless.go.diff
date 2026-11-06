@@ -1,0 +1,26 @@
+--- a/ui/headless.go
++++ b/ui/headless.go
+@@ -301,6 +301,23 @@
+ 	t.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: float64(x), Y: float64(y), Button: 1})
+ }
+ 
++// MiddleClick clicks the center of the element showing text or labeled s
++// with the middle button.
++func (t *Tester) MiddleClick(s string) error {
++	r, ok := t.Find(s)
++	if !ok {
++		return fmt.Errorf("ui: no element shows %q", s)
++	}
++	t.MiddleClickAt(r.X+r.W/2, r.Y+r.H/2)
++	return nil
++}
++
++// MiddleClickAt clicks at (x, y), in DIPs, with the middle button.
++func (t *Tester) MiddleClickAt(x, y float32) {
++	t.send(platform.SurfaceEvent{Kind: platform.PointerDown, X: float64(x), Y: float64(y), Button: 2})
++	t.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: float64(x), Y: float64(y), Button: 2})
++}
++
+ // Menu returns the labels of the items of the context menu shown, "-" for
+ // separators, or nil when none is.
+ func (t *Tester) Menu() []string {

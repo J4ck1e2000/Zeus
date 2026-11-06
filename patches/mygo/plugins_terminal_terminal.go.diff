@@ -1,0 +1,81 @@
+--- a/plugins/terminal/terminal.go
++++ b/plugins/terminal/terminal.go
+@@ -75,6 +75,9 @@
+ 	// Scrollback is about how many bytes of output the terminal keeps above
+ 	// the screen: 10 MB when zero, none when negative.
+ 	Scrollback int
++	// CopyOnSelect copies the selection to the clipboard as the pointer
++	// lets it go, as Ghostty's copy-on-select does.
++	CopyOnSelect bool
+ 	// OptionAsAlt makes Option on macOS the Alt key of programs (Meta),
+ 	// rather than the key that types accented letters and symbols.
+ 	OptionAsAlt bool
+@@ -90,11 +93,15 @@
+ 	// terminal when a program sets the title, when the program (or Conn)
+ 	// ends, when it rings the bell, and when it asks for a desktop
+ 	// notification (OSC 9, OSC 777). Calls to the terminal are safe in
+-	// them.
++	// them. OnPwd runs on the goroutine that feeds the terminal when it
++	// receives OSC 7, with the raw value. OnCopy runs on the view's thread as
++	// the view copies the selection, by the shortcut, the menu or copy on select.
+ 	OnTitle  func(title string)
++	OnPwd    func(pwd string)
+ 	OnExit   func(code int)
+ 	OnBell   func()
+ 	OnNotify func(title, body string)
++	OnCopy   func()
+ }
+ 
+ // CursorStyle is the shape of the cursor.
+
+@@ -158,6 +165,7 @@
+ // the callbacks, which run once the lock is released.
+ type events struct {
+ 	title  bool
++	pwd    bool
+ 	bells  int
+ 	notify [][2]string
+ }
+
+@@ -177,6 +185,7 @@
+ 		WritePTY:     func(p []byte) { t.in.push(append([]byte(nil), p...)) },
+ 		Bell:         func() { t.events.bells++ },
+ 		TitleChanged: func() { t.events.title = true },
++		PwdChanged:   func() { t.events.pwd = true },
+ 		RenderHold:   t.renderHold,
+
+@@ -369,24 +378,30 @@
+ func (t *Terminal) write(p []byte) {
+ 	t.mu.Lock()
+ 	var ev events
+-	var title string
++	var title, pwd string
+ 	if t.term != nil {
+ 		t.term.Write(p)
+ 		ev, t.events = t.events, events{}
+ 		if ev.title {
+ 			title = t.term.Title()
+ 		}
++		if ev.pwd {
++			pwd = t.term.Pwd()
++		}
+ 	}
+ 	t.mu.Unlock()
+-	t.fire(ev, title)
++	t.fire(ev, title, pwd)
+ 	t.redraw()
+ }
+ 
+-func (t *Terminal) fire(ev events, title string) {
++func (t *Terminal) fire(ev events, title, pwd string) {
+ 	o := &t.opts
+ 	if ev.title && o.OnTitle != nil {
+ 		o.OnTitle(title)
+ 	}
++	if ev.pwd && o.OnPwd != nil {
++		o.OnPwd(pwd)
++	}
+ 	for range ev.bells {
+ 		if o.OnBell != nil {
+ 			o.OnBell()
+ 		}

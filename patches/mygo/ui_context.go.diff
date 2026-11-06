@@ -1,0 +1,11 @@
+--- a/ui/context.go
++++ b/ui/context.go
+@@ -436,7 +436,7 @@
+ 	// tip marks an element with a tooltip (TooltipBase).
+ 	tip bool
+ 
+-	clicks, rightClicks, doubleClicks int
++	clicks, rightClicks, middleClicks, doubleClicks int
+ 	// pressMods are the modifiers held as the pointer went down on the
+ 	// element, and clickMods those of its last click.
+ 	pressMods, clickMods Modifiers

@@ -1,0 +1,80 @@
+--- a/plugins/terminal/box.go
++++ b/plugins/terminal/box.go
+@@ -40,7 +40,7 @@
+ 		return boxArms[r-0x2500] != "" || 0x256d <= r && r <= 0x2573
+ 	case 0x2580 <= r && r <= 0x259f:
+ 		return true
+-	case 0xe0b0 <= r && r <= 0xe0b3:
++	case 0xe0b0 <= r && r <= 0xe0b7:
+ 		return true
+ 	}
+ 	return false
+@@ -76,6 +76,9 @@
+ 			p.StrokePath(&path, max(1, float32(math.Round(float64(s))))/s, col)
+ 		}
+ 		return
++	case 0xe0b4 <= r && r <= 0xe0b7:
++		drawPowerlineHalfCircle(p, r, x0, y0, w, h, s, col)
++		return
+ 	}
+ 	light := max(1, float32(math.Round(float64(s))))
+ 	cx := x0 + float32(math.Floor(float64(w-light)/2))
+@@ -113,6 +116,58 @@
+ 	drawArms(fill, [4]int{int(arms[0] - '0'), int(arms[1] - '0'), int(arms[2] - '0'), int(arms[3] - '0')}, x0, y0, x1, y1, cx+light/2, cy+light/2, light)
+ }
+ 
++// drawPowerlineHalfCircle fits the Powerline rounded caps to the cell.
++// The font outlines extend past an em's vertical bounds, which makes the
++// caps taller than the terminal row in fonts with shorter metrics.
++func drawPowerlineHalfCircle(p *ui.Painter, r rune, x0, y0, w, h, scale float32, col ui.Color) {
++	top, bottom := float32(1020), float32(-300)
++	switch r {
++	case 0xe0b4:
++		top, bottom = 1027, -307
++	case 0xe0b6:
++		top, bottom = 1026, -306
++	}
++	x := func(v float32) float32 { return (x0 + v*w/600) / scale }
++	y := func(v float32) float32 { return (y0 + (top-v)*h/(top-bottom)) / scale }
++	var path ui.Path
++	switch r {
++	case 0xe0b4:
++		path.MoveTo(x(-36), y(1027)).LineTo(x(-36), y(-307)).LineTo(x(6), y(-307)).
++			QuadTo(x(151), y(-307), x(302), y(-209)).
++			QuadTo(x(600), y(-20), x(600), y(359)).
++			QuadTo(x(600), y(741), x(302), y(932)).
++			QuadTo(x(153), y(1027), x(6), y(1027)).Close()
++	case 0xe0b5:
++		path.MoveTo(x(120), y(-300)).QuadTo(x(274), y(-241), x(385), y(-130)).
++			QuadTo(x(496), y(-20), x(548), y(105)).
++			QuadTo(x(600), y(230), x(600), y(359)).
++			QuadTo(x(600), y(560), x(474), y(746)).
++			QuadTo(x(348), y(932), x(120), y(1020)).LineTo(x(0), y(1020)).
++			QuadTo(x(228), y(931), x(354), y(746)).
++			QuadTo(x(480), y(560), x(480), y(359)).
++			QuadTo(x(480), y(159), x(354), y(-25)).
++			QuadTo(x(228), y(-210), x(0), y(-300)).Close()
++	case 0xe0b6:
++		path.MoveTo(x(594), y(1026)).QuadTo(x(448), y(1026), x(298), y(932)).
++			QuadTo(x(0), y(742), x(0), y(361)).
++			QuadTo(x(0), y(-20), x(298), y(-210)).
++			QuadTo(x(448), y(-306), x(594), y(-306)).
++			LineTo(x(636), y(-306)).LineTo(x(636), y(1026)).Close()
++	case 0xe0b7:
++		path.MoveTo(x(481), y(-300)).QuadTo(x(327), y(-241), x(215), y(-130)).
++			QuadTo(x(104), y(-20), x(52), y(105)).
++			QuadTo(x(0), y(230), x(1), y(359)).
++			QuadTo(x(1), y(560), x(127), y(746)).
++			QuadTo(x(253), y(932), x(481), y(1020)).
++			LineTo(x(600), y(1020)).
++			QuadTo(x(372), y(931), x(246), y(746)).
++			QuadTo(x(120), y(560), x(120), y(359)).
++			QuadTo(x(120), y(159), x(246), y(-25)).
++			QuadTo(x(372), y(-210), x(600), y(-300)).Close()
++	}
++	p.FillPath(&path, col)
++}
++
+ // drawArms draws the arms of a box drawing character (up, right, down,
+ // left) in the cell from x0, y0 to x1, y1, whose lines cross at mx, my,
+ // light pixels wide. Light and heavy arms are lines; a double arm is two

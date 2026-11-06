@@ -1,0 +1,10 @@
+--- a/plugins/terminal/view.go
++++ b/plugins/terminal/view.go
+@@ -544,6 +544,7 @@
+ 		} else {
+ 			v.gesture.Release(t.term, nil)
+ 		}
++		v.copyOnSelect()
+ 		return true
+ 	}
+ 	return false
