@@ -36,6 +36,7 @@ func (a *App) hostChip(c *ui.Context, k *colors) {
 	}
 	if chip.Clicked() {
 		a.hostOpen = !a.hostOpen
+		a.hostHiding = !a.hostOpen
 		if a.hostOpen {
 			a.paletteOpen = false // one overlay at a time
 		}
@@ -44,18 +45,53 @@ func (a *App) hostChip(c *ui.Context, k *colors) {
 		ui.Icon(c, icon(glyph)).Size(17, 17).TextColor(k.textMuted)
 		ui.Text(c, name).FontSize(13).FontWeight(600).TextColor(k.text.Alpha(0.85)).SingleLine().Ellipsis("…")
 	})
-	was := a.hostOpen
-	ui.PopoverBase(c, chip, &a.hostOpen, func(panel ui.Element) {
-		// The panel takes the keyboard focus while it shows: the focused
-		// terminal would keep the keys, and Escape would never reach it.
-		panel.AutoFocus()
-		panel.Margin(8, 0, 0, 0).Width(300).Padding(14).Radius(18).Material(panelGlass(k)).Border(1, k.panelBorder).
+	// The panel fades in and out by hand: the layer it is born in exists
+	// only while it shows, so the framework's Enter and Exit, which look
+	// for a parent the frame before showed, have nothing to hold on to. A
+	// close no one timed fades from where it was.
+	if !a.hostOpen && !a.hostHiding && a.hostWasShown {
+		a.hostHiding = true
+	}
+	shown := a.hostOpen || a.hostHiding
+	fresh := shown && !a.hostWasShown
+	a.hostWasShown = shown
+	var v float32 // how shown the panel is
+	ui.PopoverBase(c, chip, &shown, func(panel ui.Element) {
+		target := float32(0)
+		if a.hostOpen {
+			target = 1
+		}
+		if fresh {
+			panel.Animate("host show", 0, dialogFade) // start from nothing
+		}
+		v = panel.Animate("host show", target, dialogFade)
+		// The panel rises the last little way as it settles under the chip.
+		panel.Opacity(v).Margin(8+(1-v)*6, 0, 0, 0).Width(300).Padding(14).Radius(18).
+			Material(panelGlass(k)).Border(1, k.panelBorder).
 			Shadow(0, 12, 32, 0, k.shadowFocused).Gap(12)
+		if a.hostOpen {
+			// The panel takes the keyboard focus while it shows: the
+			// focused terminal would keep the keys, and Escape would
+			// never reach it.
+			panel.AutoFocus()
+		}
 		a.hostPanel(c, k, name, glyph)
 	})
-	if was && !a.hostOpen {
-		if t := a.tab(); t != nil && a.focusReq == nil {
-			a.focusReq = t.Focus // the keys go back to the pane
+	if a.hostOpen && !shown { // Escape, or a click outside it, closed it
+		a.hostOpen = false
+	}
+	if !a.hostOpen && a.hostHiding && v == 0 {
+		// The fade is over; the keys go back to the pane, unless another
+		// overlay has taken them while this one faded. WasShown goes too,
+		// or the catch-all close above would rebuild this invisible panel
+		// every frame, and it would take the presses of the title bar.
+		a.hostHiding = false
+		a.hostWasShown = false
+		c.After(time.Millisecond) // a frame without the panel, so it stops taking presses
+		if !a.paletteOpen && !a.paletteHiding {
+			if t := a.tab(); t != nil && a.focusReq == nil {
+				a.focusReq = t.Focus
+			}
 		}
 	}
 }

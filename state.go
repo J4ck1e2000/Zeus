@@ -111,17 +111,34 @@ type App struct {
 	paletteQuery string
 	paletteSel   int
 	hostOpen     bool
-	moreTabsOpen bool
-	moreTabs     []*Tab
-	renaming     *Tab
-	renameText   string
-	renameFocus  bool
-	recording    *command
-	recordingErr string
-	find         findState
-	saveDue      bool
-	lastSave     time.Time
-	quitting     bool
+	// Overlays fade in and out by hand: the layer they are born in exists
+	// only while one shows, so the framework's Enter and Exit have no
+	// parent that outlives them. The hiding flags keep an overlay built
+	// while it fades, and the shown flags tell it was built the frame
+	// before.
+	paletteHiding   bool
+	paletteWasShown bool
+	hostHiding      bool
+	hostWasShown    bool
+	bannerHiding    bool
+	bannerWasShown  bool
+	bannerText      string
+	moreTabsOpen    bool
+	moreTabs        []*Tab
+	renaming        *Tab
+	renameText      string
+	renameFocus     bool
+	recording       *command
+	recordingErr    string
+	find            findState
+	saveDue         bool
+	lastSave        time.Time
+	quitting        bool
+	// winClosing tells the window is dissolving before it closes, as the
+	// last tab went; winCloseBy is when the fade gives up and closes
+	// anyway.
+	winClosing   bool
+	winCloseBy   time.Time
 	focusedWin   bool
 	lastSnapshot string
 	title        string
@@ -303,6 +320,7 @@ func (a *App) ring(p *Pane) {
 
 // newTab opens a tab with a shell in dir, after the active tab.
 func (a *App) newTab(dir string) *Tab {
+	a.winClosing = false // the window stays, and its fade gives way
 	t := &Tab{ID: a.id()}
 	p := a.newPane(dir, 0, 0)
 	t.Root = &Node{ID: a.id(), Pane: p}
@@ -376,7 +394,11 @@ func (a *App) closeFindFor(p *Pane) {
 	}
 }
 
-// closePane closes a pane and ends its session.
+// closePane closes a pane and ends its session. Its split keeps the
+// pane's side empty rather than folding under the one beside it, so the
+// box the panes stand in outlives the pane, and its card fades away
+// under the one that takes the room, as a split fades in when it is
+// made.
 func (a *App) closePane(p *Pane) {
 	if p.closed {
 		return
@@ -396,21 +418,27 @@ func (a *App) closePane(p *Pane) {
 	}
 	t.recent = slices.DeleteFunc(t.recent, func(q *Pane) bool { return q == p })
 	n := p.Node
-	if n.Parent == nil {
+	if n.Parent == nil || len(t.panes()) == 1 {
 		a.removeTab(t)
 		return
 	}
 	parent := n.Parent
-	other := parent.A
-	if other == n {
-		other = parent.B
-	}
-	// The other side takes the parent's place.
-	parent.Pane, parent.A, parent.B, parent.Vertical, parent.Ratio = other.Pane, other.A, other.B, other.Vertical, other.Ratio
-	if parent.Pane != nil {
-		parent.Pane.Node = parent
+	if parent.A == n {
+		parent.A = nil
 	} else {
-		parent.A.Parent, parent.B.Parent = parent, parent
+		parent.B = nil
+	}
+	// A split whose both sides went away folds out of the tree, and so do
+	// the splits above it that it leaves empty; the box of the one that
+	// went fades away with the pane it held.
+	for parent.A == nil && parent.B == nil && parent.Parent != nil {
+		gp := parent.Parent
+		if gp.A == parent {
+			gp.A = nil
+		} else {
+			gp.B = nil
+		}
+		parent = gp
 	}
 	if t.Focus == p {
 		next := (*Pane)(nil)
@@ -443,15 +471,24 @@ func (a *App) removeTab(t *Tab) {
 	if len(a.tabs) == 0 {
 		a.changed()
 		a.save()
-		if a.win != nil {
-			a.win.Close()
-		}
+		a.closeWinSoon()
 		return
 	}
 	if nt := a.tab(); nt != nil {
 		a.focusReq = nt.Focus
 	}
 	a.changed()
+}
+
+// closeWinSoon dissolves the window before it closes it: the content
+// fades into the desktop behind the glass, and the view closes the
+// window when it is gone. A new tab gives way.
+func (a *App) closeWinSoon() {
+	if a.win == nil || a.winClosing {
+		return
+	}
+	a.winClosing = true
+	a.winCloseBy = time.Now().Add(600 * time.Millisecond)
 }
 
 // closeTab closes a tab and ends the sessions of its panes.
@@ -573,6 +610,9 @@ func (a *App) equalize() {
 	}
 	var walk func(n *Node) (cols, rows int)
 	walk = func(n *Node) (int, int) {
+		if n == nil {
+			return 0, 0
+		}
 		if n.Pane != nil {
 			return 1, 1
 		}
@@ -733,6 +773,9 @@ func (a *App) snapshot() savedLayout {
 	l := savedLayout{Active: a.active}
 	var save func(n *Node) *savedNode
 	save = func(n *Node) *savedNode {
+		if n == nil {
+			return nil
+		}
 		if p := n.Pane; p != nil {
 			s := &savedNode{SID: p.SID, Dir: p.info.Dir}
 			if s.Dir == "" {
@@ -742,6 +785,14 @@ func (a *App) snapshot() savedLayout {
 				s.Cols, s.Rows = p.term.Size()
 			}
 			return s
+		}
+		if n.A == nil || n.B == nil {
+			// A split standing on one side, as when its other pane closed:
+			// save the side that is there, so the saved tree has none.
+			if n.A != nil {
+				return save(n.A)
+			}
+			return save(n.B)
 		}
 		return &savedNode{Vertical: n.Vertical, Ratio: n.Ratio, A: save(n.A), B: save(n.B)}
 	}

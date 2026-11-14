@@ -331,6 +331,14 @@ func (a *App) fileTreePanel(c *ui.Context, k *colors) ui.Element {
 	s := &a.fileTree
 	panel := ui.Column(c.Key("file tree panel")).Width(252).MinWidth(190).MaxWidth(320).MinHeight(0).
 		Padding(11).Gap(8).Radius(cardR).Material(panelGlass(k)).Border(1, k.panelBorder)
+	// The panel slides in from the left as it opens, and back to it as it
+	// closes, over the panes, which take its room at once and glide into
+	// it, as their own transitions ask.
+	panel.Transition(ui.ElementTransition{
+		Duration: 160 * time.Millisecond,
+		Enter:    &ui.Motion{X: -12, Opacity: 0},
+		Exit:     &ui.Motion{X: -12, Opacity: 0},
+	})
 	panel.Children(func() {
 		ui.Row(c).Height(28).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, tr("Files")).FontSize(13).FontWeight(650).TextColor(k.text)
@@ -431,7 +439,8 @@ func (a *App) drawFileTreeDirectory(c *ui.Context, k *colors, key string, depth 
 			accessibleLabel = fmt.Sprintf(tr("Symbolic link: %s"), entry.Name)
 		}
 		row := ui.Row(c.Key("file tree row "+key+"/"+entry.Name)).Height(27).Padding(0, 7, 0, 4+float32(depth*15)).
-			Gap(6).AlignItems(ui.Center).Cursor(ui.CursorPointer).Role(ui.RoleButton).Label(accessibleLabel)
+			Gap(6).AlignItems(ui.Center).Cursor(ui.CursorPointer).Role(ui.RoleButton).Label(accessibleLabel).
+			Transition(ui.ElementTransition{Position: true, Colors: true, Duration: 140 * time.Millisecond})
 		row.ContextMenu(func(m *ui.Menu) {
 			if m.Item(tr("Copy Path")).Chosen() {
 				a.copyFileTreeEntry(c, directory, entry.Name)

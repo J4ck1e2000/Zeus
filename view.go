@@ -21,6 +21,8 @@ const (
 	divHit      = 4                      // how far the divider's hit area reaches into the panes
 	copiedHold  = 900 * time.Millisecond // how long the copied toast stays
 	copiedFade  = 240 * time.Millisecond // how long it takes to leave
+	dialogFade  = 180 * time.Millisecond // how long an overlay takes to fade in or out
+	closeFade   = 120 * time.Millisecond // how fast a pane or the window dissolves as it closes
 	ratioMin    = 0.05                   // how little of a split's room a side keeps
 	ratioMax    = 0.95
 )
@@ -30,7 +32,26 @@ func (a *App) view(c *ui.Context) {
 	a.runPosted()
 	k := colorsOf(c)
 	a.focusedWin = a.win == nil || a.win.IsFocused()
-	c.Root().Background(k.bgBottom)
+	root := c.Root().Background(k.bgBottom)
+	if a.winClosing {
+		// The window dissolves before it goes: everything behind the
+		// glass fades into the desktop, and the window closes when the
+		// fade is done, or when it has taken long enough. Animate keeps
+		// the frames coming while it moves and goes at once without the
+		// motion.
+		v := root.Animate("window close", 0, closeFade)
+		root.Opacity(v)
+		if v == 0 || time.Now().After(a.winCloseBy) {
+			a.winClosing = false
+			a.later(c, func() {
+				if a.win != nil {
+					a.win.Close()
+				}
+			})
+		}
+	} else {
+		root.Animate("window close", 1, closeFade)
+	}
 	ui.Column(c).Fill().Draw(func(p *ui.Painter, r ui.Rect) { paintBackground(p, r, k) }).Children(func() {
 		a.titleBar(c, k)
 		ui.Row(c).Grow(1).MinHeight(0).Padding(0, gap, gap, gap).Gap(gap).AlignItems(ui.Stretch).Children(func() {
@@ -44,9 +65,7 @@ func (a *App) view(c *ui.Context) {
 			}
 		})
 	})
-	if a.err != "" {
-		a.errorBanner(c, k)
-	}
+	a.errorBanner(c, k)
 	a.shortcuts(c)
 	a.palette(c, k)
 	if a.saveDue && time.Since(a.lastSave) > time.Second {
@@ -144,7 +163,7 @@ func (a *App) windowControlsFor(c *ui.Context, k *colors, win *mygo.Window) {
 			ui.Icon(c, icon("x")).Size(17, 17).TextColor(col)
 		})
 		if b.Clicked() {
-			win.Close()
+			a.closeWinSoon()
 		}
 	})
 }
@@ -226,66 +245,88 @@ func (a *App) node(c *ui.Context, k *colors, t *Tab, n *Node) ui.Element {
 	}
 	box.MinWidth(0).MinHeight(0).AlignItems(ui.Stretch)
 	enter := &ui.Motion{Opacity: 0}
+	leave := &ui.Motion{Opacity: 0}
 	if n.Vertical {
-		enter.Y = 6
+		enter.Y, leave.Y = 6, 6
 	} else {
-		enter.X = 6
+		enter.X, leave.X = 6, 6
 	}
+	// The leave is the enter run backwards: the box goes as it came, as
+	// when a zoom takes the tree away.
 	box.Transition(ui.ElementTransition{
-		Colors: true, Duration: 160 * time.Millisecond, Enter: enter,
+		Colors: true, Duration: 160 * time.Millisecond, Enter: enter, Exit: leave,
 	})
 	bounds := box.Bounds()
 	// The tree may change as its panes build, as a split: build the
-	// children it has now.
+	// children it has now. A side may stand empty, as when its pane
+	// closed and the box stayed for its card to fade away under the one
+	// beside it.
 	first, second, ratio := n.A, n.B, n.Ratio
 	box.Children(func() {
-		a.node(c, k, t, first).Grow(ratio).Basis(0).MinWidth(0).MinHeight(0)
-		div := ui.Box(c.Key("divider"))
-		if n.Vertical {
-			div.Height(gap)
-		} else {
-			div.Width(gap)
-		}
-		a.node(c, k, t, second).Grow(1 - ratio).Basis(0).MinWidth(0).MinHeight(0)
-		// The hit area sits over the divider of the last frame and
-		// reaches into the panes on both sides: the gap alone is a small
-		// target to catch. Built after the panes, it takes their presses
-		// there, and it takes the splitter's role and label for
-		// accessibility as well. While it drags, the pressed element
-		// keeps the moves however far it lags behind.
-		d := n.divBounds
-		hit := ui.Box(c.Key("divider hit")).Absolute().Role(ui.RoleSplitter).Label(tr("Divider"))
-		if n.Vertical {
-			hit.Left(d.X - bounds.X).Top(d.Y - bounds.Y - divHit).Width(d.W).Height(d.H + 2*divHit).
-				Cursor(ui.CursorResizeRow)
-		} else {
-			hit.Left(d.X - bounds.X - divHit).Top(d.Y - bounds.Y).Width(d.W + 2*divHit).Height(d.H).
-				Cursor(ui.CursorResizeColumn)
-		}
-		if dx, dy, ok := hit.Dragged(); ok {
-			total, delta := bounds.W-gap, dx
-			if n.Vertical {
-				total, delta = bounds.H-gap, dy
+		if first != nil {
+			grow := float32(1)
+			if second != nil {
+				grow = ratio
 			}
-			if total > 0 {
-				n.Ratio = min(max(n.Ratio+delta/total, ratioMin), ratioMax)
+			a.node(c, k, t, first).Grow(grow).Basis(0).MinWidth(0).MinHeight(0)
+		}
+		if first != nil && second != nil {
+			div := ui.Box(c.Key("divider")).Transition(ui.ElementTransition{
+				Duration: 160 * time.Millisecond, Exit: &ui.Motion{Opacity: 0},
+			})
+			if n.Vertical {
+				div.Height(gap)
+			} else {
+				div.Width(gap)
+			}
+			a.node(c, k, t, second).Grow(1 - ratio).Basis(0).MinWidth(0).MinHeight(0)
+			// The hit area sits over the divider of the last frame and
+			// reaches into the panes on both sides: the gap alone is a small
+			// target to catch. Built after the panes, it takes their presses
+			// there, and it takes the splitter's role and label for
+			// accessibility as well. While it drags, the pressed element
+			// keeps the moves however far it lags behind.
+			d := n.divBounds
+			hit := ui.Box(c.Key("divider hit")).Absolute().Role(ui.RoleSplitter).Label(tr("Divider"))
+			if n.Vertical {
+				hit.Left(d.X - bounds.X).Top(d.Y - bounds.Y - divHit).Width(d.W).Height(d.H + 2*divHit).
+					Cursor(ui.CursorResizeRow)
+			} else {
+				hit.Left(d.X - bounds.X - divHit).Top(d.Y - bounds.Y).Width(d.W + 2*divHit).Height(d.H).
+					Cursor(ui.CursorResizeColumn)
+			}
+			if dx, dy, ok := hit.Dragged(); ok {
+				total, delta := bounds.W-gap, dx
+				if n.Vertical {
+					total, delta = bounds.H-gap, dy
+				}
+				if total > 0 {
+					n.Ratio = min(max(n.Ratio+delta/total, ratioMin), ratioMax)
+					a.changed()
+				}
+			}
+			if hit.DoubleClicked() {
+				n.Ratio = 0.5
 				a.changed()
 			}
-		}
-		if hit.DoubleClicked() {
-			n.Ratio = 0.5
-			a.changed()
-		}
-		hovered := hit.Hovered() || hit.Dragging() || hit.Pressed()
-		dragging := hit.Dragging() || hit.Pressed()
-		n.divBounds = div.Bounds()
-		if hovered {
+			hovered := hit.Hovered() || hit.Dragging() || hit.Pressed()
+			dragging := hit.Dragging() || hit.Pressed()
+			n.divBounds = div.Bounds()
+			// While the divider drags, the handle grows to a long accent line,
+			// which shows what the drag moves; its length eases there and back,
+			// and Animate keeps the frames coming only while it moves.
+			target := float32(36)
+			if dragging {
+				target = 160
+			}
+			length := div.Animate("divider handle", target, 120*time.Millisecond)
 			div.Draw(func(p *ui.Painter, r ui.Rect) {
-				// While the divider drags, the handle grows to a long
-				// accent line, which shows what the drag moves.
-				col, length := k.iconMuted.Alpha(0.6), float32(36)
+				if !hovered && length <= 36 {
+					return // at rest, as before the pointer came
+				}
+				col := k.iconMuted.Alpha(0.6)
 				if dragging {
-					col, length = k.focus, 160
+					col = k.focus
 				}
 				if n.Vertical {
 					w := min(length, r.W-8)
@@ -319,9 +360,22 @@ func (a *App) paneCard(c *ui.Context, k *colors, t *Tab, p *Pane) ui.Element {
 	card.Material(paneGlass(k, focused)).Border(borderW, border).
 		Shadow(0, 1, 2, 0, shadow).
 		Shadow(0, 6, 22, -2, shadow)
+	// Its leave is a split's enter run backwards: a pane goes as new
+	// panes come, sliding a little as it fades under the one beside it,
+	// which takes its room.
+	leave := &ui.Motion{Opacity: 0}
+	if n := p.Node; n != nil && n.Parent != nil {
+		if n.Parent.Vertical {
+			leave.Y = 6
+		} else {
+			leave.X = 6
+		}
+	}
 	card.Transition(ui.ElementTransition{
 		Position: true, Size: true, Colors: true,
 		Duration: 160 * time.Millisecond,
+		Enter:    &ui.Motion{Opacity: 0},
+		Exit:     leave,
 	})
 	hovered := card.Hovered()
 	card.Children(func() {
@@ -478,7 +532,10 @@ func (a *App) activityBadge(c *ui.Context, k *colors, p *Pane) {
 	case statusQuiet:
 		quietDot(c, k.busy, 5.5)
 	case statusAttention:
-		ui.Box(c).Size(7, 7).Radius(4).Background(k.attention).Margin(0, 0, 0, 2).Tooltip(tr("Needs attention"))
+		// The dot fades in, once, as the program asks for attention: the
+		// header it sits in was there the frame before.
+		ui.Box(c).Size(7, 7).Radius(4).Background(k.attention).Margin(0, 0, 0, 2).Tooltip(tr("Needs attention")).
+			Transition(ui.ElementTransition{Duration: 120 * time.Millisecond, Enter: &ui.Motion{Opacity: 0}})
 	}
 }
 
@@ -507,18 +564,57 @@ func quietDot(c *ui.Context, col ui.Color, size float32) ui.Element {
 	return e
 }
 
-// errorBanner shows what went wrong with the server.
+// errorBanner shows what went wrong with the server. It fades in and out
+// by hand: the overlay layer it is born in exists only while it shows, so
+// the framework's Enter and Exit, which look for a parent the frame
+// before showed, have nothing to hold on to.
 func (a *App) errorBanner(c *ui.Context, k *colors) {
+	if a.err != "" {
+		if a.bannerText != a.err { // a new trouble shows at once
+			a.bannerText = a.err
+			a.bannerHiding = false
+		}
+	} else if !a.bannerHiding && a.bannerWasShown {
+		a.bannerHiding = true // dismissed, or the trouble went away
+	}
+	shown := a.err != "" || a.bannerHiding
+	if !shown {
+		a.bannerWasShown = false
+		return
+	}
+	fresh := !a.bannerWasShown
+	a.bannerWasShown = true
+	var v float32 // how shown the banner is
 	ui.Overlay(c, func() {
-		ui.Row(c).Absolute().Bottom(18).Left(0).Right(0).Justify(ui.Center).PassThrough().Children(func() {
-			ui.Row(c).Gap(10).Padding(8, 10, 8, 14).Radius(14).Material(panelGlass(k)).Border(1, k.panelBorder).
-				Shadow(0, 8, 24, 0, k.shadowFocused).AlignItems(ui.Center).Children(func() {
-				ui.Box(c).Size(8, 8).Radius(4).Background(ui.Hex("#ef4444"))
-				ui.Text(c, a.err).FontSize(12.5).TextColor(k.text).MaxWidth(520)
-				if iconButton(c, k, "x", tr("Dismiss"), 22, 14).Clicked() {
-					a.err = ""
-				}
+		target := float32(0)
+		if a.err != "" {
+			target = 1
+		}
+		row := ui.Row(c)
+		if fresh {
+			row.Animate("banner show", 0, dialogFade) // start from nothing
+		}
+		v = row.Animate("banner show", target, dialogFade)
+		// It rises the last little way as it settles at the bottom.
+		row.Absolute().Bottom(18 - (1-v)*10).Left(0).Right(0).Justify(ui.Center).PassThrough().
+			Opacity(v).
+			Children(func() {
+				ui.Row(c).Gap(10).Padding(8, 10, 8, 14).Radius(14).Material(panelGlass(k)).Border(1, k.panelBorder).
+					Shadow(0, 8, 24, 0, k.shadowFocused).AlignItems(ui.Center).Children(func() {
+					ui.Box(c).Size(8, 8).Radius(4).Background(ui.Hex("#ef4444"))
+					ui.Text(c, a.bannerText).FontSize(12.5).TextColor(k.text).MaxWidth(520)
+					if iconButton(c, k, "x", tr("Dismiss"), 22, 14).Clicked() {
+						a.err = ""
+					}
+				})
 			})
-		})
 	})
+	if a.err == "" && a.bannerHiding && v == 0 {
+		// The fade is over; WasShown goes too, or the catch-all close
+		// above would rebuild this invisible banner every frame. One more
+		// frame, so the window stops hit-testing the last one.
+		a.bannerHiding = false
+		a.bannerWasShown = false
+		c.After(time.Millisecond)
+	}
 }

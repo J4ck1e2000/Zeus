@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -517,8 +518,9 @@ func (a *App) quitAndEnd() {
 
 func (a *App) openPalette() {
 	a.paletteOpen, a.paletteQuery, a.paletteSel = true, "", 0
-	a.hostOpen = false // one overlay at a time
-	a.focusReq = nil   // the palette takes the focus
+	a.paletteHiding = false // a hide under way becomes an open
+	a.hostOpen = false      // one overlay at a time
+	a.focusReq = nil        // the palette takes the focus
 }
 
 // shortcuts handles the keys the menus do not: Control-Tab between tabs,
@@ -645,43 +647,71 @@ func matchScore(text, q string) int {
 
 // palette draws the command palette, over the window.
 func (a *App) palette(c *ui.Context, k *colors) {
-	if !a.paletteOpen {
+	// The dialog fades in and out by hand: the overlay layer it is born
+	// in exists only while it shows, so the framework's Enter and Exit,
+	// which look for a parent the frame before showed, have nothing to
+	// hold on to. A close no one timed fades from where it was.
+	if !a.paletteOpen && !a.paletteHiding && a.paletteWasShown {
+		a.paletteHiding = true
+	}
+	shown := a.paletteOpen || a.paletteHiding
+	if !shown {
+		a.paletteWasShown = false
 		return
 	}
+	fresh := !a.paletteWasShown
+	a.paletteWasShown = true
 	items := a.paletteItems()
 	a.paletteSel = min(max(a.paletteSel, 0), max(len(items)-1, 0))
-	was := a.paletteOpen
 	// reveal scrolls the selection into view in the frame the keys or the
 	// query move it, and only then, so that the wheel scrolls the list.
 	reveal := false
-	ui.DialogBase(c, &a.paletteOpen, func(backdrop, panel ui.Element) {
-		backdrop.Background(k.backdrop).Justify(ui.Start).Padding(78, 0, 0, 0)
+	var v float32 // how shown the dialog is
+	ui.DialogBase(c, &shown, func(backdrop, panel ui.Element) {
+		target := float32(0)
+		if a.paletteOpen {
+			target = 1
+		}
+		if fresh {
+			backdrop.Animate("palette show", 0, dialogFade) // start from nothing
+		}
+		v = backdrop.Animate("palette show", target, dialogFade)
+		backdrop.Background(k.backdrop.Alpha(float32(k.backdrop.A)/255*v)).Justify(ui.Start).Padding(78, 0, 0, 0)
 		panel.Width(560).MaxHeight(474).Radius(20).Material(panelGlass(k)).Border(1, k.panelBorder).
-			Shadow(0, 24, 60, -8, ui.RGBA(0, 0, 0, 0.28)).Shadow(0, 2, 6, 0, ui.RGBA(0, 0, 0, 0.06)).Clip()
+			Shadow(0, 24, 60, -8, ui.RGBA(0, 0, 0, 0.28)).Shadow(0, 2, 6, 0, ui.RGBA(0, 0, 0, 0.06)).Clip().
+			Opacity(v).Margin((1-v)*14, 0, 0, 0)
 		ui.Row(c).Padding(12, 16).Gap(10).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(k.panelBorder).Children(func() {
 			ui.Icon(c, icon("search")).Size(17, 17).TextColor(k.textFaint)
-			in := ui.TextInputBase(c, &a.paletteQuery).Grow(1).FontSize(15).Placeholder(tr("Type a command, or the name of a pane…")).AutoFocus()
-			if in.Changed() {
+			in := ui.TextInputBase(c, &a.paletteQuery).Grow(1).FontSize(15).Placeholder(tr("Type a command, or the name of a pane…"))
+			if a.paletteOpen {
+				// The keys go to the dialog while it shows, not while it
+				// fades away.
+				in.AutoFocus()
+			}
+			if a.paletteOpen && in.Changed() {
 				a.paletteSel, reveal = 0, true
 			}
-			if in.Shortcut(0, ui.KeyDown) {
+			if a.paletteOpen && in.Shortcut(0, ui.KeyDown) {
 				a.paletteSel, reveal = min(a.paletteSel+1, len(items)-1), true
 			}
-			if in.Shortcut(0, ui.KeyUp) {
+			if a.paletteOpen && in.Shortcut(0, ui.KeyUp) {
 				a.paletteSel, reveal = max(a.paletteSel-1, 0), true
 			}
-			if in.Submitted() && len(items) > 0 {
+			if a.paletteOpen && in.Submitted() && len(items) > 0 {
 				a.paletteOpen = false
 				items[a.paletteSel].run()
 			}
 		})
 		listH := float32(min(max(len(items), 1)*34+12, 384))
-		ui.Scroll(c).Height(listH).Padding(6).Children(func() {
+		// The list grows and shrinks with what the query leaves of it,
+		// and the highlight fades between the rows the keys move it by.
+		ui.Scroll(c).Height(listH).Padding(6).Transition(ui.ElementTransition{Size: true, Duration: 160 * time.Millisecond}).Children(func() {
 			if len(items) == 0 {
 				ui.Text(c, tr("No matches")).FontSize(13).TextColor(k.textFaint).Padding(14)
 			}
 			for i, it := range items {
-				row := ui.Row(c.Key(i)).Height(34).Padding(0, 10).Gap(10).Radius(8).AlignItems(ui.Center).Cursor(ui.CursorPointer)
+				row := ui.Row(c.Key(i)).Height(34).Padding(0, 10).Gap(10).Radius(8).AlignItems(ui.Center).Cursor(ui.CursorPointer).
+					Transition(ui.ElementTransition{Colors: true, Duration: 100 * time.Millisecond})
 				if i == a.paletteSel {
 					row.Background(k.panelSel)
 					if reveal {
@@ -690,7 +720,7 @@ func (a *App) palette(c *ui.Context, k *colors) {
 				} else if row.Hovered() {
 					row.Background(k.hover)
 				}
-				if row.Clicked() {
+				if a.paletteOpen && row.Clicked() {
 					a.paletteOpen = false
 					it.run()
 				}
@@ -719,9 +749,22 @@ func (a *App) palette(c *ui.Context, k *colors) {
 			hint("Esc", tr("Close"))
 		})
 	})
-	if was && !a.paletteOpen {
-		if t := a.tab(); t != nil && a.focusReq == nil {
-			a.focusReq = t.Focus
+	if a.paletteOpen && !shown { // Escape, or a click outside it, closed it
+		a.paletteOpen = false
+	}
+	if !a.paletteOpen && a.paletteHiding && v == 0 {
+		// The fade is over; the keys go back to the pane, unless another
+		// overlay has taken them while this one faded. WasShown goes too,
+		// or the catch-all close below would fade this invisible dialog
+		// over and over, and its modal backdrop would take every press
+		// and drag forever.
+		a.paletteHiding = false
+		a.paletteWasShown = false
+		c.After(time.Millisecond) // a frame without the dialog, so its backdrop stops taking presses
+		if !a.hostOpen && !a.hostHiding {
+			if t := a.tab(); t != nil && a.focusReq == nil {
+				a.focusReq = t.Focus
+			}
 		}
 	}
 }

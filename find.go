@@ -162,9 +162,15 @@ func (a *App) findBar(c *ui.Context, k *colors) {
 	f := &a.find
 	// The search floats over the pane's corner in a pill of glass, as
 	// the copied toast does, leaving the last rows of the screen alone.
+	// It rises in and sinks back out on the toast's rhythm.
 	bar := ui.Row(c).Absolute().Right(12).Bottom(12).Height(38).Padding(0, 5, 0, 12).Gap(7).AlignItems(ui.Center).
 		Radius(19).Material(panelGlass(k)).Border(1, k.panelBorder).
 		Shadow(0, 2, 10, 0, k.shadowFocused)
+	bar.Transition(ui.ElementTransition{
+		Duration: copiedFade,
+		Enter:    &ui.Motion{Y: 10, Opacity: 0},
+		Exit:     &ui.Motion{Y: 10, Opacity: 0},
+	})
 	bar.Children(func() {
 		ui.Icon(c, icon("search")).Size(14, 14).TextColor(k.textFaint)
 		in := ui.TextInput(c, &f.query).Placeholder(tr("Find…")).Width(200).FontSize(12.5).AutoFocus()
