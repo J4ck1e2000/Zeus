@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -27,7 +26,7 @@ func (a *App) tabStrip(c *ui.Context, k *colors) {
 	widths := make([]float32, len(a.tabs))
 	total := float32(4 + max(len(a.tabs)-1, 0)) // the padding and separators
 	for i, t := range a.tabs {
-		widths[i] = tabWidth(c, t)
+		widths[i] = a.tabWidth(c, t)
 		total += widths[i]
 	}
 	track := ui.Row(c).Basis(total).Shrink(1).MinWidth(0).Height(tabH+4).Padding(2).Radius((tabH+4)/2).
@@ -46,9 +45,11 @@ func (a *App) tabStrip(c *ui.Context, k *colors) {
 		}
 	})
 	// When the tabs do not fit the track, the ones past its end live in
-	// the overflow's menu, which keeps room for itself.
+	// the overflow's menu, which keeps room for itself. The track's
+	// bounds are empty on the first frame, before it lays out: skip
+	// those, or every tab would land in the overflow at once.
 	a.moreTabs = nil
-	if avail := track.Bounds().W - 4; total > avail {
+	if avail := track.Bounds().W - 4; avail > 0 && total > avail {
 		limit := max(avail-30, tabMinW)
 		end := float32(0)
 		for i, t := range tabs {
@@ -111,10 +112,19 @@ func (a *App) moreTabRow(c *ui.Context, k *colors, t *Tab) {
 
 // tabWidth returns the width a tab takes when the title bar has room: its
 // tiles and its label, the label faded out past tabMaxW, and room for its
-// close button or its dot.
-func tabWidth(c *ui.Context, t *Tab) float32 {
+// close button or its dot. Labels measure once and stay in the app, the
+// fonts changing only through applyFont.
+func (a *App) tabWidth(c *ui.Context, t *Tab) float32 {
 	name, detail := t.label()
-	w, _ := c.MeasureText(0, tabLabel(name, detail, ui.Color{}, ui.Color{})...)
+	key := name + "\x00" + detail
+	w, ok := a.tabWidths[key]
+	if !ok {
+		w, _ = c.MeasureText(0, tabLabel(name, detail, ui.Color{}, ui.Color{})...)
+		if a.tabWidths == nil {
+			a.tabWidths = map[string]float32{}
+		}
+		a.tabWidths[key] = w
+	}
 	tiles := float32(tileW + tileStep*min(len(t.panes())-1, 2) + 2)
 	return min(max(6+tiles+9+w+9+18+10, tabMinW), tabMaxW)
 }
@@ -182,7 +192,7 @@ func (a *App) tabItem(c *ui.Context, k *colors, i int, t *Tab, width float32) {
 		}
 		label := ui.Box(c).Grow(1).MinWidth(0).Height(18)
 		label.Draw(func(p *ui.Painter, r ui.Rect) {
-			fadeText(p, r, tabLabel(name, detail, nameColor, detailColor))
+			fadeText(p, r, name, detail, nameColor, detailColor)
 		})
 		if hovered && len(a.tabs) > 1 {
 			x := iconButton(c, k, "x", tr("Close Tab"), 18, 12).Tooltip(tr("Close Tab"))
@@ -352,13 +362,13 @@ func drawTile(p *ui.Painter, k *colors, r ui.Rect, prog program, glyph bool) {
 	p.Icon(icon(g), ui.Rect{X: r.X + (r.W-s)/2, Y: r.Y + (r.H-s)/2, W: s, H: s}, prog.TileFg)
 }
 
-// fadeText draws spans on a line, fading the end out when they do not
-// fit, rather than cutting them with an ellipsis.
-func fadeText(p *ui.Painter, r ui.Rect, spans []ui.Span) {
-	key := fmt.Sprintf("%.0f|%v", r.W, spans)
+// fadeText draws a tab's label on a line, fading its end out when it
+// does not fit, rather than cutting it with an ellipsis.
+func fadeText(p *ui.Painter, r ui.Rect, name, detail string, nameColor, detailColor ui.Color) {
+	key := fadeKey{w: r.W, name: name, detail: detail, nameColor: nameColor, detailColor: detailColor}
 	f, ok := fades[key]
 	if !ok {
-		f = layoutFade(p, r.W, spans)
+		f = layoutFade(p, r.W, tabLabel(name, detail, nameColor, detailColor))
 		if len(fades) > 512 {
 			clear(fades)
 		}
@@ -367,8 +377,16 @@ func fadeText(p *ui.Painter, r ui.Rect, spans []ui.Span) {
 	p.RichText(r.X, r.Y+(r.H-f.h)/2, 0, f.spans...)
 }
 
-// fades caches the spans of faded texts, by their width and spans.
-var fades = map[string]fadeLayout{}
+// fades caches the spans of faded labels, by what they show.
+var fades = map[fadeKey]fadeLayout{}
+
+// fadeKey is a faded label: its width, its text, and the colors it
+// shows in.
+type fadeKey struct {
+	w                      float32
+	name, detail           string
+	nameColor, detailColor ui.Color
+}
 
 type fadeLayout struct {
 	spans []ui.Span

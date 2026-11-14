@@ -58,7 +58,7 @@ func PrepareLocal(shell Shell, options LocalOptions) (Launch, error) {
 		hookPath := filepath.Join(options.IntegrationDir, "bash-hook.sh")
 		initPath := filepath.Join(options.IntegrationDir, "bash-init.sh")
 		launch.Args = append(args, "--init-file", initPath)
-		launch.Env = uniqueOverrides(options.Environment, map[string]string{
+		launch.Env = uniqueOverrides(map[string]string{
 			"ZEUS_BASH_HOOK":   hookPath,
 			"ZEUS_SHELL_LOGIN": boolEnv(login),
 		})
@@ -80,7 +80,7 @@ func PrepareLocal(shell Shell, options LocalOptions) (Launch, error) {
 			originalZdotdir = envValue(options.Environment, "HOME")
 		}
 		hookPath := filepath.Join(options.IntegrationDir, "zsh-hook.zsh")
-		launch.Env = uniqueOverrides(options.Environment, map[string]string{
+		launch.Env = uniqueOverrides(map[string]string{
 			"ZEUS_ORIGINAL_ZDOTDIR": originalZdotdir,
 			"ZEUS_ZSH_HOOK":         hookPath,
 			"ZEUS_ZSH_WRAPPER":      wrapperDir,
@@ -128,10 +128,18 @@ func prepareBashArgs(args []string) ([]string, bool) {
 	return filtered, login
 }
 
+// hasNonInteractiveCommand reports whether the user's own arguments already
+// decide how the shell starts. When the shell is told to run a command, read
+// from stdin, or skip its startup files, Zeus must not add its own init file
+// on top: the later argument would silently win, so the integration is
+// skipped instead.
 func hasNonInteractiveCommand(args []string) bool {
 	for _, arg := range args[1:] {
 		switch arg {
-		case "-c", "--command", "-s", "--":
+		case "-c", "--command", "-s", "--", "--norc", "--noprofile", "--init-file":
+			return true
+		}
+		if strings.HasPrefix(arg, "--init-file=") {
 			return true
 		}
 	}
@@ -157,7 +165,7 @@ func containsFold(values []string, want string) bool {
 	return false
 }
 
-func uniqueOverrides(environment []string, overrides map[string]string) []string {
+func uniqueOverrides(overrides map[string]string) []string {
 	keys := make([]string, 0, len(overrides))
 	for key := range overrides {
 		keys = append(keys, key)

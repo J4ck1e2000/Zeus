@@ -19,6 +19,15 @@ import (
 // it.
 func lockFile(f *os.File) error { return unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB) }
 
+// unlockFile releases what lockFile took; closing the file would too.
+func unlockFile(f *os.File) { unix.Flock(int(f.Fd()), unix.LOCK_UN) }
+
+// tightenUmask keeps what the process creates to its user alone, so that
+// the server's socket is not open between its listen and its chmod. It
+// stays set for the process's life: restoring it would race the
+// goroutines that write files.
+func tightenUmask() { syscall.Umask(0o077) }
+
 // detached starts the server in a session of its own, which outlives the
 // app's.
 func detached() *syscall.SysProcAttr { return &syscall.SysProcAttr{Setsid: true} }

@@ -16,6 +16,9 @@ import (
 // Client is a control connection to the server.
 type Client struct {
 	conn net.Conn
+	// token is the server's, from the file it wrote before it listened:
+	// the first line of a connection carries it.
+	token string
 
 	wmu     sync.Mutex
 	mu      sync.Mutex
@@ -45,7 +48,12 @@ func Connect() (*Client, error) {
 			}
 		}
 	}
-	c := &Client{conn: conn, pending: map[int64]chan Response{}, closed: make(chan struct{})}
+	token, err := os.ReadFile(filepath.Join(Dir(), "server.token"))
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("zeus: reading the server's token: %w", err)
+	}
+	c := &Client{conn: conn, token: string(token), pending: map[int64]chan Response{}, closed: make(chan struct{})}
 	go c.read()
 	return c, nil
 }
@@ -149,8 +157,10 @@ func (c *Client) call(req Request, out any) error {
 }
 
 func (c *Client) Hello() (h Hello, err error) {
-	err = c.call(Request{Op: "hello"}, &h)
-	return
+	if err = c.call(Request{Op: "hello", Token: c.token}, &h); err == nil && h.Version != ProtocolVersion {
+		err = fmt.Errorf("zeus: server protocol v%d, want v%d; quit and end all sessions to restart it", h.Version, ProtocolVersion)
+	}
+	return h, err
 }
 
 func (c *Client) List() (s []SessionInfo, err error) {
@@ -229,7 +239,7 @@ func (s *Stream) attach() {
 	s.mu.Unlock()
 	conn, err := net.Dial("unix", SocketPath())
 	if err == nil {
-		b, _ := json.Marshal(Attach{Op: "attach", SID: s.sid, Cols: cols, Rows: rows})
+		b, _ := json.Marshal(Attach{Op: "attach", Token: s.c.token, SID: s.sid, Cols: cols, Rows: rows})
 		if _, err = conn.Write(append(b, '\n')); err == nil {
 			err = readOK(conn)
 		}
@@ -262,9 +272,16 @@ func (s *Stream) sync() error {
 		return nil
 	}
 	cols, rows := s.cols, s.rows
+	s.mu.Unlock()
+	if err := s.c.Resize(s.sid, cols, rows); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	// What was sent is recorded once the server took it: a failed resize
+	// is tried again the next time the size changed.
 	s.sentCols, s.sentRows = cols, rows
 	s.mu.Unlock()
-	return s.c.Resize(s.sid, cols, rows)
+	return nil
 }
 
 // readOK reads the server's answer to an attach, a byte at a time so as

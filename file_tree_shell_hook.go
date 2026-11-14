@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/egoist/mygo/ui"
 
@@ -47,7 +46,7 @@ func (s *fileTreeShellHookState) resetForTarget(location filetree.Location) {
 	target, ok := sshTargetFromFileTreeLocation(location)
 	key := ""
 	if ok {
-		key = fileTreeShellHookTargetKey(target)
+		key = sshTargetKey(target, false)
 	}
 	if key == s.targetKey {
 		if ok {
@@ -77,14 +76,6 @@ func sshTargetFromFileTreeLocation(location filetree.Location) (filetree.SSHTarg
 	default:
 		return filetree.SSHTarget{}, false
 	}
-}
-
-func fileTreeShellHookTargetKey(target filetree.SSHTarget) string {
-	literal := "plain"
-	if target.DestinationLiteral {
-		literal = "literal"
-	}
-	return target.Destination + "\x00" + literal + "\x00" + strings.Join(target.Options, "\x00")
 }
 
 func cloneSSHTarget(target filetree.SSHTarget) filetree.SSHTarget {
@@ -264,7 +255,7 @@ func (a *App) drawFileTreeShellHookConfirmation(c *ui.Context, k *colors, remove
 		return
 	}
 	host, user := s.info.Host, s.info.User
-	fallbackHost, fallbackUser := shellHookDestinationIdentity(s.target.Destination)
+	fallbackHost, fallbackUser := filetree.DestinationIdentity(s.target.Destination)
 	if host == "" {
 		host = fallbackHost
 	}
@@ -294,12 +285,4 @@ func (a *App) drawFileTreeShellHookConfirmation(c *ui.Context, k *colors, remove
 		settingsButtonWide(c, k, tr("Install shell hook"), 110, a.installFileTreeShellHook)
 		settingsButtonWide(c, k, tr("Cancel shell hook setup"), 108, a.cancelFileTreeShellHookSetup)
 	})
-}
-
-func shellHookDestinationIdentity(destination string) (host, user string) {
-	host = destination
-	if index := strings.LastIndex(destination, "@"); index >= 0 {
-		user, host = destination[:index], destination[index+1:]
-	}
-	return host, user
 }

@@ -3,20 +3,25 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
 
+// findDebounce is how long the find bar lets the typing settle before
+// it searches the scrollback.
+const findDebounce = 120 * time.Millisecond
+
 // findState is the search of a pane's screen and scrollback: the query,
-// the rows of the terminal when it last ran, and the rows that match.
+// the rows that match, and the search it waits to run while typing.
 type findState struct {
 	open      bool
 	pane      *Pane
 	query     string
-	rows      []string
 	matches   []int
 	sel       int
 	wasBottom bool
+	timer     *time.Timer
 }
 
 // openFind shows the find bar at the focused pane, or hides it when it
@@ -40,6 +45,7 @@ func (a *App) openFind() {
 // closeFind hides the find bar, gives the keys back to the pane, and
 // returns to the bottom of the scrollback when the search started there.
 func (a *App) closeFind() {
+	a.stopFind()
 	a.find.open = false
 	if p := a.find.pane; p != nil {
 		if a.find.wasBottom && p.term != nil {
@@ -82,8 +88,36 @@ func (a *App) research() {
 			f.matches = append(f.matches, base+i)
 		}
 	}
-	f.rows = rows
 	f.sel = min(f.sel, max(len(f.matches)-1, 0))
+}
+
+// researchSoon searches when the typing has settled, instead of for
+// every key. The search runs on the main thread, in the window the bar
+// is of.
+func (a *App) researchSoon() {
+	win := a.win
+	if a.find.timer != nil {
+		a.find.timer.Stop()
+	}
+	a.find.timer = time.AfterFunc(findDebounce, func() {
+		if win == nil {
+			return
+		}
+		win.Update(func() {
+			if a.win == win && a.find.open {
+				a.research()
+				a.findShow(true)
+			}
+		})
+	})
+}
+
+// stopFind drops a search the bar was still waiting to run.
+func (a *App) stopFind() {
+	if a.find.timer != nil {
+		a.find.timer.Stop()
+		a.find.timer = nil
+	}
 }
 
 // findShow brings the selected match into view, at the bottom of the
@@ -110,6 +144,7 @@ func (a *App) findNext(down bool) {
 	if f.pane == nil {
 		return
 	}
+	a.stopFind()
 	a.research()
 	if len(f.matches) == 0 {
 		return
@@ -135,8 +170,7 @@ func (a *App) findBar(c *ui.Context, k *colors) {
 		in := ui.TextInput(c, &f.query).Placeholder(tr("Find…")).Width(200).FontSize(12.5).AutoFocus()
 		if in.Changed() {
 			f.sel = 0
-			a.research()
-			a.findShow(true)
+			a.researchSoon()
 		}
 		if in.Submitted() {
 			a.findNext(true)

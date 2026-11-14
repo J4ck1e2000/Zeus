@@ -35,7 +35,8 @@ func remoteShellInstaller(info RemoteShellInfo, hook shellintegration.File, unin
 	}
 	b.WriteString("set -u\numask 077\n")
 	fmt.Fprintf(&b, "expected_shell=%s\nexpected_home=%s\n", quotePOSIXUnchecked(expectedShell), home)
-	b.WriteString("shell_name=${SHELL##*/}\n")
+	b.WriteString("shell=${SHELL:-}\n")
+	b.WriteString("shell_name=${shell##*/}\n")
 	b.WriteString("[ \"$shell_name\" = \"$expected_shell\" ] || { printf '%s\\n' 'remote login shell changed' >&2; exit 1; }\n")
 	b.WriteString("[ \"${HOME:-}\" = \"$expected_home\" ] || { printf '%s\\n' 'remote HOME changed' >&2; exit 1; }\n")
 	b.WriteString("hook_dir=\"$HOME/.config/zeus/shell-integration\"\n")
@@ -226,6 +227,9 @@ rollback() {
         else
           rm -f "$rollback_path"
         fi
+      elif [ -f "$txn_dir/$rollback_index.restore_backup" ]; then
+        rollback_path=$(cat "$txn_dir/$rollback_index.path")
+        cp -p "$txn_dir/$rollback_index.original" "$rollback_path" 2>/dev/null || :
       fi
       if [ -f "$txn_dir/$rollback_index.temp" ]; then
         rm -f "$(cat "$txn_dir/$rollback_index.temp")"
@@ -315,6 +319,16 @@ commit_install() {
 `
 
 const remoteUninstallBody = `
+discard_backup() {
+  discard_flag=$1
+  discard_path=$2
+  discard_backup="$discard_path.zeus-shell-integration.bak"
+  if [ -e "$discard_backup" ] && [ ! -f "$discard_backup" ]; then return 1; fi
+  if [ -f "$discard_backup" ]; then
+    : > "$txn_dir/$discard_flag.backup_staged"
+  fi
+}
+
 stage_config_remove() {
   remove_index=$1
   remove_requested=$2
@@ -323,6 +337,7 @@ stage_config_remove() {
   if [ ! -e "$remove_path" ]; then
     printf '0\n' > "$txn_dir/$remove_index.changed"
     printf '0\n' > "$txn_dir/$remove_index.existed"
+    discard_backup "$remove_index" "$remove_path" || return 1
     return 0
   fi
   [ -f "$remove_path" ] || return 1
@@ -332,6 +347,7 @@ stage_config_remove() {
   remove_end=$(grep -Fxc "$block_end" "$remove_path" 2>/dev/null || :)
   if [ "$remove_start" = 0 ] && [ "$remove_end" = 0 ]; then
     printf '0\n' > "$txn_dir/$remove_index.changed"
+    discard_backup "$remove_index" "$remove_path" || return 1
     return 0
   fi
   if [ "$remove_start" != 1 ] || [ "$remove_end" != 1 ]; then return 1; fi
@@ -346,7 +362,13 @@ stage_config_remove() {
     !inside { print }
     END { if (inside || bad || starts != 1 || ends != 1) exit 2 }
   ' "$remove_path" > "$remove_tmp" || return 1
-  if [ ! -s "$remove_tmp" ] && [ ! -e "$remove_path.zeus-shell-integration.bak" ]; then
+  remove_backup="$remove_path.zeus-shell-integration.bak"
+  if [ -e "$remove_backup" ] && [ ! -f "$remove_backup" ]; then return 1; fi
+  if [ -s "$remove_tmp" ]; then
+    discard_backup "$remove_index" "$remove_path" || return 1
+  elif [ -f "$remove_backup" ]; then
+    : > "$txn_dir/$remove_index.restore_backup"
+  else
     : > "$txn_dir/$remove_index.remove_file"
   fi
   printf '1\n' > "$txn_dir/$remove_index.changed"
@@ -355,6 +377,7 @@ stage_config_remove() {
 stage_hook_remove() {
   if [ ! -e "$hook_file" ]; then
     : > "$txn_dir/hook.existed"
+    discard_backup hook "$hook_file" || return 1
     return 0
   fi
   [ -f "$hook_file" ] || return 1
@@ -365,25 +388,36 @@ stage_hook_remove() {
   cp -p "$hook_file" "$txn_dir/hook.original" || return 1
   printf '1\n' > "$txn_dir/hook.existed"
   : > "$txn_dir/hook.changed"
+  discard_backup hook "$hook_file" || return 1
 }
 
 commit_uninstall() {
   commit_index=1
   while [ "$commit_index" -le "$config_count" ]; do
+    commit_path=$(cat "$txn_dir/$commit_index.path") || return 1
     if [ -f "$txn_dir/$commit_index.changed" ] && [ "$(cat "$txn_dir/$commit_index.changed")" = 1 ]; then
-      commit_path=$(cat "$txn_dir/$commit_index.path") || return 1
-      commit_tmp=$(cat "$txn_dir/$commit_index.temp") || return 1
-      if [ -f "$txn_dir/$commit_index.remove_file" ]; then
-        mv "$commit_path" "$txn_dir/$commit_index.removed" || return 1
+      if [ -f "$txn_dir/$commit_index.restore_backup" ]; then
+        mv "$commit_path.zeus-shell-integration.bak" "$commit_path" || return 1
       else
-        : > "$txn_dir/$commit_index.committing" || return 1
-        mv "$commit_tmp" "$commit_path" || return 1
+        commit_tmp=$(cat "$txn_dir/$commit_index.temp") || return 1
+        if [ -f "$txn_dir/$commit_index.remove_file" ]; then
+          mv "$commit_path" "$txn_dir/$commit_index.removed" || return 1
+        else
+          : > "$txn_dir/$commit_index.committing" || return 1
+          mv "$commit_tmp" "$commit_path" || return 1
+        fi
       fi
+    fi
+    if [ -f "$txn_dir/$commit_index.backup_staged" ]; then
+      rm -f "$commit_path.zeus-shell-integration.bak" || return 1
     fi
     commit_index=$((commit_index + 1))
   done
   if [ -f "$txn_dir/hook.changed" ]; then
     mv "$hook_file" "$txn_dir/hook.removed" || return 1
+  fi
+  if [ -f "$txn_dir/hook.backup_staged" ]; then
+    rm -f "$hook_file.zeus-shell-integration.bak" || return 1
   fi
   return 0
 }

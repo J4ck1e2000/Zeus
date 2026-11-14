@@ -125,6 +125,9 @@ type App struct {
 	focusedWin   bool
 	lastSnapshot string
 	title        string
+	// tabWidths is how wide each tab's label measures, until the fonts
+	// change.
+	tabWidths map[string]float32
 
 	// posted are changes to make in the next frame, from terminals of a
 	// view without a window, as in tests.
@@ -366,15 +369,20 @@ func (a *App) split(vertical bool) {
 	a.changed()
 }
 
+// closeFindFor hides the find bar when the pane it searches goes away.
+func (a *App) closeFindFor(p *Pane) {
+	if a.find.pane == p {
+		a.find.open = false
+	}
+}
+
 // closePane closes a pane and ends its session.
 func (a *App) closePane(p *Pane) {
 	if p.closed {
 		return
 	}
 	p.closed = true
-	if a.find.pane == p {
-		a.find.open = false
-	}
+	a.closeFindFor(p)
 	if p.term != nil {
 		p.term.Close()
 	}
@@ -450,6 +458,7 @@ func (a *App) removeTab(t *Tab) {
 func (a *App) closeTab(t *Tab) {
 	for _, p := range t.panes() {
 		p.closed = true
+		a.closeFindFor(p)
 		if p.term != nil {
 			p.term.Close()
 		}
@@ -549,7 +558,7 @@ func (a *App) resizeFocused(dx, dy int) {
 		if dx < 0 || dy < 0 {
 			step = -step
 		}
-		p.Ratio = min(max(p.Ratio+step, 0.1), 0.9)
+		p.Ratio = min(max(p.Ratio+step, ratioMin), ratioMax)
 		a.changed()
 		return
 	}
@@ -804,7 +813,7 @@ func (a *App) restore() bool {
 			n.Pane = p
 			return n
 		}
-		n.Vertical, n.Ratio = s.Vertical, min(max(s.Ratio, 0.05), 0.95)
+		n.Vertical, n.Ratio = s.Vertical, min(max(s.Ratio, ratioMin), ratioMax)
 		n.A, n.B = load(s.A, t, n), load(s.B, t, n)
 		return n
 	}
@@ -864,7 +873,9 @@ func (a *App) poll(win *mygo.Window, client *zeus.Client) {
 		select {
 		case <-client.Closed():
 			win.Update(func() {
-				if !a.quitting {
+				// The window may have closed as the client did; its
+				// error is for the window still showing.
+				if a.win == win && !a.quitting {
 					a.err = tr("Lost the connection to the session server.")
 				}
 			})
@@ -904,7 +915,7 @@ func (a *App) apply(byID map[string]zeus.SessionInfo) {
 				if !seen {
 					p.attention = true
 				}
-				if !a.focusedWin && time.Since(was.LastInput) > 8*time.Second {
+				if !a.focusedWin && time.Since(was.LastInput) > notifyAfter {
 					prog := programOf(was.Program)
 					what := tr(prog.Name)
 					where := ""

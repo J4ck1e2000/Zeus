@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"log"
 	"path"
 	"strings"
 
@@ -13,8 +14,11 @@ var assets embed.FS
 
 var svgs = map[string]*ui.SVG{}
 
+// fallbackIcon is what a name with no asset of its own shows.
+const fallbackIcon = "square-terminal"
+
 // icon returns an embedded SVG: "x" from the icons, "brand:git" from the
-// brands.
+// brands. A name with no asset shows the fallback's, logged once.
 func icon(name string) *ui.SVG {
 	if s, ok := svgs[name]; ok {
 		return s
@@ -25,7 +29,13 @@ func icon(name string) *ui.SVG {
 	}
 	data, err := assets.ReadFile(file)
 	if err != nil {
-		panic(err)
+		log.Printf("icon: %s: %v", name, err)
+		if name == fallbackIcon {
+			return nil
+		}
+		s := icon(fallbackIcon)
+		svgs[name] = s
+		return s
 	}
 	s := ui.MustParseSVG(data)
 	svgs[name] = s

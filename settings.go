@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,49 +88,83 @@ func settingsPath() string { return filepath.Join(zeus.Dir(), "settings.json") }
 
 func loadSettings() {
 	if b, err := os.ReadFile(settingsPath()); err == nil {
-		json.Unmarshal(b, &prefs)
+		if err := json.Unmarshal(b, &prefs); err != nil {
+			log.Printf("reading the settings: %v", err)
+		}
 	}
-	if prefs.FontSize < 6 || prefs.FontSize > 40 {
-		prefs.FontSize = defaultFontSize
-	}
-	if prefs.NewTabStart != "home" {
-		prefs.NewTabStart = "current"
-	}
-	if prefs.NewTabStart == "choose" && prefs.NewTabDir == "" {
-		prefs.NewTabStart = "current"
-	}
-	if prefs.FontFamily == "" {
-		prefs.FontFamily = defaultFontFamily
-	}
-	if prefs.LineHeight < 0.8 || prefs.LineHeight > 2 {
-		prefs.LineHeight = 1
-	}
-	if prefs.ScrollbackMB == 0 {
-		prefs.ScrollbackMB = 10
-	}
-	if prefs.ScrollbackMB < 0 {
-		prefs.ScrollbackMB = -1
-	}
-	switch prefs.Cursor {
-	case "bar", "underline":
-	default:
-		prefs.Cursor = ""
-	}
-	switch prefs.Language {
-	case langEn, langZh:
-	default:
-		prefs.Language = ""
-	}
+	sanitizeSettings(&prefs)
 	termFont.Size = prefs.FontSize
 	termFont.Family = terminalFontFamily(prefs.FontFamily)
 	termFont.LineHeight = prefs.LineHeight
 	applyAppearance()
 }
 
+// sanitizeSettings bends the settings to what the app accepts, so a
+// hand-edited or half-written file cannot break it. It changes nothing
+// else, so tests can run it on its own.
+func sanitizeSettings(p *settings) {
+	if p.FontSize == 0 {
+		p.FontSize = defaultFontSize
+	}
+	p.FontSize = min(max(p.FontSize, 8), 32)
+	if p.NewTabStart != "home" && p.NewTabStart != "choose" {
+		p.NewTabStart = "current"
+	}
+	if p.NewTabStart == "choose" && p.NewTabDir == "" {
+		p.NewTabStart = "current"
+	}
+	if p.FontFamily == "" {
+		p.FontFamily = defaultFontFamily
+	}
+	if p.LineHeight < 0.8 || p.LineHeight > 2 {
+		p.LineHeight = 1
+	}
+	if p.ScrollbackMB == 0 {
+		p.ScrollbackMB = 10
+	}
+	if p.ScrollbackMB < 0 {
+		p.ScrollbackMB = -1
+	}
+	if p.ScrollbackMB > 1024 {
+		p.ScrollbackMB = 1024
+	}
+	switch p.Cursor {
+	case "bar", "underline":
+	default:
+		p.Cursor = ""
+	}
+	switch p.Language {
+	case langEn, langZh:
+	default:
+		p.Language = ""
+	}
+	for k, s := range p.Shortcuts {
+		if s.Mods == 0 || s.Key == 0 {
+			delete(p.Shortcuts, k)
+		}
+	}
+}
+
+// saveSettings keeps the settings, writing them to a file beside the
+// old one and renaming it over, so a crash cannot leave them half done.
 func saveSettings() {
-	b, _ := json.MarshalIndent(prefs, "", "  ")
-	os.MkdirAll(zeus.Dir(), 0o700)
-	os.WriteFile(settingsPath(), b, 0o600)
+	b, err := json.MarshalIndent(prefs, "", "  ")
+	if err != nil {
+		log.Printf("saving the settings: %v", err)
+		return
+	}
+	if err := os.MkdirAll(zeus.Dir(), 0o700); err != nil {
+		log.Printf("saving the settings: %v", err)
+		return
+	}
+	tmp := settingsPath() + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		log.Printf("saving the settings: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, settingsPath()); err != nil {
+		log.Printf("saving the settings: %v", err)
+	}
 }
 
 func applyAppearance() {
@@ -227,10 +262,13 @@ func cursorBlinkOf() bool {
 	return true
 }
 
-// applyFont sets the terminals' font in every pane and the preview.
+// applyFont sets the terminals' font in every pane and the preview, and
+// forgets the widths the old one measured.
 func (a *App) applyFont() {
 	termFont.Family = terminalFontFamily(prefs.FontFamily)
 	termFont.LineHeight = prefs.LineHeight
+	a.tabWidths = nil
+	clear(fades)
 	if a.settingsPreview != nil {
 		a.settingsPreview.SetFont(termFont)
 	}

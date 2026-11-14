@@ -38,8 +38,12 @@ type session struct {
 	// vt is the session's screen, kept by the terminal emulator of the
 	// app's terminals without a view: a window attaching gets a snapshot
 	// of it at its size, as the session shows it now.
-	vt             *terminal.Terminal
-	vtIn           *io.PipeWriter
+	vt   *terminal.Terminal
+	vtIn *io.PipeWriter
+	// pwds carries the directory a shell reported, from the emulator's
+	// callback, which runs under the lock, to read, which publishes it
+	// with no lock held.
+	pwds           chan string
 	shellDir       string
 	shellDirPID    int
 	integrationDir string
@@ -50,25 +54,40 @@ type session struct {
 	lastInput      time.Time
 	resync         *time.Timer
 	exited         bool
+	exitAt         time.Time
 	code           int
 	cols, rows     int
 	done           chan struct{}
 }
+
+// attachedCap is how many bytes an attached connection may have queued
+// before the server decides it is too far behind and detaches it.
+const attachedCap = 4 << 20
 
 // attached is a connection attached to a session, whose output a
 // goroutine writes so that a slow client never holds up the others.
 type attached struct {
 	conn net.Conn
 	out  chan []byte
-	once sync.Once
+	// queued is how many bytes of out the client has yet to read.
+	queued atomic.Int64
+	once   sync.Once
 }
 
 func (a *attached) send(p []byte) bool {
+	if a.queued.Add(int64(len(p))) > attachedCap {
+		a.queued.Add(-int64(len(p)))
+		return false // too far behind: drop it, it attaches again
+	}
+	// The queue is bounded in bytes and in items: whichever fills first,
+	// what sends never waits for a slow client, least of all holding the
+	// session's lock.
 	select {
 	case a.out <- p:
 		return true
 	default:
-		return false // too far behind: drop it, it attaches again
+		a.queued.Add(-int64(len(p)))
+		return false
 	}
 }
 
@@ -76,6 +95,7 @@ func (a *attached) finish() { a.once.Do(func() { close(a.out) }) }
 
 func (a *attached) writer() {
 	for p := range a.out {
+		a.queued.Add(-int64(len(p)))
 		if _, err := a.conn.Write(p); err != nil {
 			break
 		}
@@ -133,6 +153,7 @@ func newSession(id string, o CreateOptions) (*session, error) {
 	s := &session{
 		id: id, shell: name, created: time.Now(), p: p,
 		clients: map[*attached]struct{}{},
+		pwds:    make(chan string, 1),
 		cols:    cols, rows: rows, done: make(chan struct{}), integrationDir: integrationDir,
 	}
 	// The emulator's Conn reads nothing, and what it would answer programs
@@ -142,16 +163,19 @@ func newSession(id string, o CreateOptions) (*session, error) {
 		Conn: discard{pr}, Scrollback: scrollback,
 		OnBell: func() { s.bells.Add(1) },
 		OnPwd: func(string) {
-			fg := s.p.foreground()
-			if fg <= 0 {
-				fg = s.p.pid()
+			// The emulator runs this as it feeds, under the session's
+			// lock: post the directory, and read works out whose process
+			// it belongs to once the lock is released. The work it needs
+			// is slow enough to stall a session that feeds.
+			select {
+			case s.pwds <- s.vt.Dir():
+			default:
 			}
-			p := inspect(fg)
-			s.shellDir, s.shellDirPID = shellDirForProcess(p.programName(), fg, s.p.pid(), s.shell, s.vt.Dir())
 		},
 	})
 	if err != nil {
 		p.hangup()
+		go p.wait() // the child still wants reaping
 		if integrationDir != "" {
 			_ = os.RemoveAll(integrationDir)
 		}
@@ -175,7 +199,7 @@ func newSession(id string, o CreateOptions) (*session, error) {
 			<-read
 		}
 		s.mu.Lock()
-		s.exited, s.code = true, code
+		s.exited, s.code, s.exitAt = true, code, time.Now()
 		for a := range s.clients {
 			a.finish()
 		}
@@ -299,10 +323,34 @@ func (s *session) read() {
 			}
 			s.mu.Unlock()
 		}
+		// The shell's directory the emulator reported waits in the
+		// channel: the work of finding whose process it belongs to runs
+		// here, where the session's lock is not held.
+		select {
+		case dir := <-s.pwds:
+			s.publishShellDir(dir)
+		default:
+		}
 		if err != nil {
 			return
 		}
 	}
+}
+
+// publishShellDir records the directory a shell reported as its working
+// one, with the process it belongs to. It runs with no lock held: the
+// foreground process group and the inspection of the process it finds
+// are slow enough to stall a session that feeds its emulator.
+func (s *session) publishShellDir(dir string) {
+	fg := s.p.foreground()
+	if fg <= 0 {
+		fg = s.p.pid()
+	}
+	p := inspect(fg)
+	dir, pid := shellDirForProcess(p.programName(), fg, s.p.pid(), s.shell, dir)
+	s.mu.Lock()
+	s.shellDir, s.shellDirPID = dir, pid
+	s.mu.Unlock()
 }
 
 // attach attaches a connection: it gets a snapshot of the session's
@@ -320,6 +368,9 @@ func (s *session) attach(conn net.Conn, cols, rows int) {
 	if title := s.vt.Title(); title != "" {
 		snap = append([]byte("\x1b]2;"+title+"\x07"), snap...)
 	}
+	// The snapshot counts toward what the client has yet to read, but no
+	// cap turns it away: it is what attaching is for.
+	a.queued.Add(int64(len(snap)))
 	a.out <- snap
 	exited := s.exited
 	if exited {

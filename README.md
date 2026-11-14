@@ -51,9 +51,11 @@ This project is based on [egoist/gorex](https://github.com/egoist/gorex).
   The hook is stored in the remote user's home directory, takes effect after
   reconnecting SSH, and does not install a remote server or background process.
   Zeus uses non-interactive OpenSSH authentication for setup, so password-only
-  hosts are unsupported. SSH `RemoteCommand`, forced commands, unsupported
-  shells, or unavailable key/agent authentication leave SFTP browsing available
-  and report why directory tracking cannot be enabled.
+  hosts are unsupported. Unsupported shells or unavailable key/agent
+  authentication leave SFTP browsing available and report why directory
+  tracking cannot be enabled. An SSH `RemoteCommand` or a forced command runs
+  instead of the SFTP server, so for those hosts directory tracking cannot be
+  enabled and browsing fails too, with the reason shown.
 - **Command palette** (⇧⌘P, Ctrl+Shift+P, or the ⌘ button): every command, and every pane
   to jump to, fuzzy-matched and ranked.
 - **Find** (⌘F, Ctrl+Shift+F): searches the pane's screen and scrollback,
@@ -71,7 +73,7 @@ This project is based on [egoist/gorex](https://github.com/egoist/gorex).
 |---|---|---|
 | ⌘T | Ctrl+Shift+T | New tab |
 | ⌘D / ⇧⌘D | Ctrl+Shift+D / Ctrl+Shift+E | Split right / down |
-| ⌘W / ⇧⌘W | Ctrl+Shift+W | Close pane / tab |
+| ⌘W / ⇧⌘W | Ctrl+Shift+W / — | Close pane / tab |
 | ⇧⌘↩ | Ctrl+Shift+Enter | Zoom the pane |
 | ⌥⌘ arrows | Alt+arrows | Focus the pane in that direction |
 | ⌃⌘ arrows | Alt+Shift+arrows | Move the nearest divider |
@@ -133,10 +135,12 @@ resizes from its sides and bottom, not its top.
 |---|---|
 | `main.go` | the app, its window, and `-server` |
 | `state.go` | tabs, the tree of splits, panes, saving and restoring the layout |
-| `view.go`, `tabs.go`, `host.go`, `commands.go` | the interface: title bar, tabs, panes, host popover, menus and palette |
+| `view.go`, `tabs.go`, `host.go`, `commands.go`, `find.go` | the interface: title bar, tabs, panes, host popover, menus, palette, and find |
 | `file_tree.go`, `file_tree_shell_hook.go`, `internal/filetree`, `internal/shellintegration` | the pane-following file tree, local shell hooks, and explicit SSH shell-hook setup |
 | `programs.go` | how programs show: names, glyphs, tile colors |
 | `style.go`, `settings.go` | colors, fonts, terminal themes; appearance and text size |
+| `preferences.go` | the Settings window and the shortcuts' recording |
+| `lang.go` | the interface's English and 简体中文 |
 | `internal/zeus` | the session server and its client: PTYs, foreground processes, headless screens, the socket protocol |
 
 Zeus does not manage remote terminal sessions; its session server listens on

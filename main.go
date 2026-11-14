@@ -21,6 +21,14 @@ import (
 )
 
 func main() {
+	// The state of the sessions lives in the app's data directory, which
+	// the server it starts takes from ZEUS_DIR: "Zeus", or "Zeus Dev"
+	// under mygo dev, which keeps the installed app's sessions apart.
+	if os.Getenv("ZEUS_DIR") == "" {
+		if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
+			os.Setenv("ZEUS_DIR", dir)
+		}
+	}
 	// -server runs the session server; other arguments are AppKit's, as
 	// -NSWindowResizeTime, which it reads itself.
 	if len(os.Args) > 1 && os.Args[1] == "-server" {
@@ -30,13 +38,10 @@ func main() {
 		}
 		return
 	}
-	// The state of the sessions lives in the app's data directory, which
-	// the server it starts takes from ZEUS_DIR: "Zeus", or "Zeus Dev"
-	// under mygo dev, which keeps the installed app's sessions apart.
-	if os.Getenv("ZEUS_DIR") == "" {
-		if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
-			os.Setenv("ZEUS_DIR", dir)
-		}
+	// One window of Zeus at a time: two would attach to every session
+	// and overwrite each other's layout.
+	if _, err := zeus.LockApp(); err != nil {
+		log.Fatalf("Zeus is already running: %v", err)
 	}
 	registerFonts()
 	loadSettings()
@@ -86,15 +91,22 @@ func (a *App) open() {
 		if client, err = client.Restart(a.hello.PID); err == nil {
 			a.client = client
 			a.hello, err = client.Hello()
-		} else {
+		}
+		if err != nil {
 			log.Print(err)
 			mygo.Dialog.Error(tr("Zeus could not restart its session server"), err.Error())
 			mygo.App.Quit()
 			return
 		}
 	}
-	if err == nil && a.hello.Version != zeus.ProtocolVersion {
-		a.err = tr("The session server is of another version of Zeus: quit and end all sessions to restart it.")
+	if err != nil {
+		// The hello fails when the server speaks another protocol's
+		// version, among its other ways of going: none of them opens a
+		// window.
+		log.Print(err)
+		mygo.Dialog.Error(tr("Zeus could not start its session server"), err.Error())
+		mygo.App.Quit()
+		return
 	}
 	a.reset()
 	opts := mygo.WindowOptions{
@@ -165,7 +177,8 @@ func (a *App) saveNow() {
 func (a *App) reset() {
 	a.fileTree.reset()
 	a.tabs, a.active, a.focusReq = nil, 0, nil
-	a.paletteOpen, a.hostOpen, a.renaming = false, false, nil
+	a.paletteOpen, a.hostOpen, a.moreTabsOpen, a.renaming = false, false, false, nil
+	a.recording, a.recordingErr, a.find = nil, "", findState{}
 	a.saveDue, a.quitting, a.lastSnapshot, a.title = false, false, "", ""
 }
 

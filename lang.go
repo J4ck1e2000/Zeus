@@ -205,6 +205,9 @@ var zh = map[string]string{
 	"Type a command, or the name of a pane…": "输入命令或窗格名称…",
 	"Pane %d":          "窗格 %d",
 	"Tab %d · Pane %d": "标签页 %d · 窗格 %d",
+	// The words panes are matched by, beside the English ones.
+	"tab":  "标签页",
+	"pane": "窗格",
 
 	// Programs and the sessions.
 	"Git Changes":                 "Git 更改",
@@ -214,10 +217,9 @@ var zh = map[string]string{
 	"Could not start a session: ": "无法启动会话：",
 	"%s finished":                 "%s 已结束",
 	"in %s":                       "位于 %s",
-	"Lost the connection to the session server.":                                                 "与 session 服务器的连接已断开。",
-	"The session server is of another version of Zeus: quit and end all sessions to restart it.": "会话服务器属于另一个 Zeus 版本：请退出并结束所有会话后重启。",
-	"Zeus could not start its session server":                                                    "Zeus 无法启动会话服务器",
-	"Zeus could not restart its session server":                                                  "Zeus 无法重启会话服务器",
+	"Lost the connection to the session server.": "与 session 服务器的连接已断开。",
+	"Zeus could not start its session server":    "Zeus 无法启动会话服务器",
+	"Zeus could not restart its session server":  "Zeus 无法重启会话服务器",
 
 	// Settings.
 	"Settings":                              "设置",

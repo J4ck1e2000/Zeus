@@ -19,6 +19,16 @@ func lockFile(f *os.File) error {
 	return windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &ol)
 }
 
+// unlockFile releases what lockFile took; closing the file would too.
+func unlockFile(f *os.File) {
+	var ol windows.Overlapped
+	windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &ol)
+}
+
+// tightenUmask does nothing: Windows has no umask, and the files the
+// server creates are private by where they are.
+func tightenUmask() {}
+
 // detached starts the server without a console, out of the app's process
 // group and, when it may leave it, its job, so that it outlives the app.
 func detached() *syscall.SysProcAttr {

@@ -12,14 +12,17 @@ import (
 )
 
 const (
-	gap        = 8  // between panes, and around them
-	titleH     = 44 // the title bar
-	cardR      = 16 // the panes' corners
-	headerH    = 33 // the panes' headers
-	activeFor  = 1500 * time.Millisecond
-	divHit     = 4                      // how far the divider's hit area reaches into the panes
-	copiedHold = 900 * time.Millisecond // how long the copied toast stays
-	copiedFade = 240 * time.Millisecond // how long it takes to leave
+	gap         = 8  // between panes, and around them
+	titleH      = 44 // the title bar
+	cardR       = 16 // the panes' corners
+	headerH     = 33 // the panes' headers
+	activeFor   = 1500 * time.Millisecond
+	notifyAfter = 8 * time.Second        // a program that finished after this long without input notifies
+	divHit      = 4                      // how far the divider's hit area reaches into the panes
+	copiedHold  = 900 * time.Millisecond // how long the copied toast stays
+	copiedFade  = 240 * time.Millisecond // how long it takes to leave
+	ratioMin    = 0.05                   // how little of a split's room a side keeps
+	ratioMax    = 0.95
 )
 
 func (a *App) view(c *ui.Context) {
@@ -58,6 +61,9 @@ func (a *App) view(c *ui.Context) {
 			a.win.SetTitle(title)
 		}
 	}
+	// The sidebar follows the focused pane as it changes, this frame or
+	// not: what it does beyond the binding of the selection waits for the
+	// poll, and the binding itself costs a few string comparisons.
 	a.syncFileTree()
 }
 
@@ -262,7 +268,7 @@ func (a *App) node(c *ui.Context, k *colors, t *Tab, n *Node) ui.Element {
 				total, delta = bounds.H-gap, dy
 			}
 			if total > 0 {
-				n.Ratio = min(max(n.Ratio+delta/total, 0.08), 0.92)
+				n.Ratio = min(max(n.Ratio+delta/total, ratioMin), ratioMax)
 				a.changed()
 			}
 		}

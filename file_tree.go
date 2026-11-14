@@ -40,7 +40,6 @@ type fileTreeState struct {
 	directories    map[string]*fileTreeDirectory
 	requests       map[string]context.CancelFunc
 	generation     uint64
-	copiedPath     string
 	copiedAt       time.Time
 	shellHook      fileTreeShellHookState
 }
@@ -62,7 +61,6 @@ func (s *fileTreeState) reset() {
 	s.sourceLocation = nil
 	s.locationErr = ""
 	s.directories = nil
-	s.copiedPath = ""
 	s.copiedAt = time.Time{}
 }
 
@@ -139,20 +137,27 @@ func fileTreeLocationKey(location filetree.Location) string {
 	case filetree.LocalLocation:
 		return "local:" + loc.Path
 	case filetree.SSHLocation:
-		return "ssh:" + sshTargetKey(loc.Target) + ":" + loc.Path
+		return "ssh:" + sshTargetKey(loc.Target, true) + ":" + loc.Path
 	case filetree.SSHLocationUnknown:
-		return "ssh-unknown:" + sshTargetKey(loc.Target)
+		return "ssh-unknown:" + sshTargetKey(loc.Target, true)
 	default:
 		return fmt.Sprintf("unsupported:%T:%#v", location, location)
 	}
 }
 
-func sshTargetKey(target filetree.SSHTarget) string {
+// sshTargetKey identifies an SSH target in the file tree caches. Directory
+// listings differ per working directory, while shell hook state follows the
+// destination across them; includeWorkingDir separates the two keys.
+func sshTargetKey(target filetree.SSHTarget, includeWorkingDir bool) string {
 	literal := "plain"
 	if target.DestinationLiteral {
 		literal = "literal"
 	}
-	return target.Destination + "\x00" + literal + "\x00" + strings.Join(target.Options, "\x00") + "\x00" + target.WorkingDir
+	key := target.Destination + "\x00" + literal + "\x00" + strings.Join(target.Options, "\x00")
+	if includeWorkingDir {
+		key += "\x00" + target.WorkingDir
+	}
+	return key
 }
 
 func shortFileTreePath(value string, remote bool) string {
@@ -191,7 +196,7 @@ func (a *App) loadFileTreeDirectory(location filetree.Location, force bool) {
 	}
 	directory := s.directories[key]
 	if directory != nil {
-		if directory.state == fileTreeLoading || !force && (directory.state == fileTreeReady || directory.state == fileTreeFailed) {
+		if directory.state == fileTreeLoading || (!force && (directory.state == fileTreeReady || directory.state == fileTreeFailed)) {
 			return
 		}
 	} else {
@@ -307,7 +312,6 @@ func (a *App) copyFileTreeEntry(c *ui.Context, directory *fileTreeDirectory, nam
 		return
 	}
 	c.WriteClipboard(text)
-	a.fileTree.copiedPath = text
 	a.fileTree.copiedAt = time.Now()
 }
 

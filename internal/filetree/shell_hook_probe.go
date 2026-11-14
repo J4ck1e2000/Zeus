@@ -110,11 +110,13 @@ func (m sshShellHookProbe) Probe(ctx context.Context, target SSHTarget) (RemoteS
 	if target.Destination == "" {
 		return info, fmt.Errorf("SSH destination is missing")
 	}
-	commandCtx, cancel := context.WithTimeout(ctx, m.timeout())
-	defer cancel()
+	// Each ssh invocation gets its own timeout budget: a slow ssh -G must
+	// not eat the time the probe script still needs.
 	runner := m.runner()
 	executable := m.executable()
-	configOut, configErr, err := runner(commandCtx, executable, target.WorkingDir, m.sshArgs(target, "-G"), "")
+	configCtx, cancelConfig := context.WithTimeout(ctx, m.timeout())
+	configOut, configErr, err := runner(configCtx, executable, target.WorkingDir, m.sshArgs(target, "-G"), "")
+	cancelConfig()
 	if err != nil {
 		return info, sshDiagnostic("inspect SSH config", target.Destination, configErr, err)
 	}
@@ -123,7 +125,7 @@ func (m sshShellHookProbe) Probe(ctx context.Context, target SSHTarget) (RemoteS
 	}
 	host, user := parseSSHConfigIdentity(configOut)
 	if host == "" || user == "" {
-		fallbackHost, fallbackUser := sshDestinationIdentity(target.Destination)
+		fallbackHost, fallbackUser := DestinationIdentity(target.Destination)
 		if host == "" {
 			host = fallbackHost
 		}
@@ -135,7 +137,9 @@ func (m sshShellHookProbe) Probe(ctx context.Context, target SSHTarget) (RemoteS
 	if err != nil {
 		return info, fmt.Errorf("create SSH probe marker: %w", err)
 	}
-	stdout, stderr, err := runner(commandCtx, executable, target.WorkingDir, m.sshArgs(target, "sh -s"), remoteShellProbeScript(marker))
+	probeCtx, cancelProbe := context.WithTimeout(ctx, m.timeout())
+	defer cancelProbe()
+	stdout, stderr, err := runner(probeCtx, executable, target.WorkingDir, m.sshArgs(target, "sh -s"), remoteShellProbeScript(marker))
 	if err != nil {
 		return info, sshDiagnostic("probe remote shell", target.Destination, stderr, err)
 	}
@@ -186,7 +190,11 @@ func parseSSHConfigIdentity(output []byte) (host, user string) {
 	return host, user
 }
 
-func sshDestinationIdentity(destination string) (host, user string) {
+// DestinationIdentity splits an SSH destination into its host and user parts.
+// A destination without a login name uses the whole destination as the host
+// and leaves the user empty, so callers can fall back to it when the SSH
+// config says nothing.
+func DestinationIdentity(destination string) (host, user string) {
 	host = destination
 	if index := strings.LastIndex(destination, "@"); index >= 0 {
 		user, host = destination[:index], destination[index+1:]

@@ -18,7 +18,9 @@ func (a *App) debugHook() {
 	}
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	go func() {
-		for range time.Tick(150 * time.Millisecond) {
+		tick := time.NewTicker(150 * time.Millisecond)
+		defer tick.Stop()
+		for range tick.C {
 			req := filepath.Join(dir, "do")
 			b, err := os.ReadFile(req)
 			if err != nil {
@@ -60,8 +62,9 @@ func (a *App) debug(dir, line string) {
 			}
 		})
 	case "size":
-		var w, h int
-		if _, err := fmtSscan(arg, &w, &h); err == nil {
+		aw, ah, _ := strings.Cut(arg, " ")
+		w, h := atoi(aw), atoi(ah)
+		if w > 0 && h > 0 {
 			win.SetSize(w, h)
 		}
 	default:
@@ -116,10 +119,4 @@ func atoi(s string) int {
 		}
 	}
 	return n
-}
-
-func fmtSscan(s string, w, h *int) (int, error) {
-	a, b, _ := strings.Cut(s, " ")
-	*w, *h = atoi(a), atoi(b)
-	return 2, nil
 }

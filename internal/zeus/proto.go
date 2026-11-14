@@ -17,12 +17,13 @@ import (
 )
 
 // ProtocolVersion changes whenever the wire protocol does.
-const ProtocolVersion = 1
+const ProtocolVersion = 2
 
 // Request is a line of the control connection, from the client.
 type Request struct {
 	ID     int64           `json:"id"`
 	Op     string          `json:"op"`
+	Token  string          `json:"token,omitempty"`
 	SID    string          `json:"sid,omitempty"`
 	Cols   int             `json:"cols,omitempty"`
 	Rows   int             `json:"rows,omitempty"`
@@ -105,10 +106,11 @@ type HostInfo struct {
 
 // Attach is the first line of a connection attaching to a session.
 type Attach struct {
-	Op   string `json:"op"` // "attach"
-	SID  string `json:"sid"`
-	Cols int    `json:"cols"`
-	Rows int    `json:"rows"`
+	Op    string `json:"op"` // "attach"
+	Token string `json:"token,omitempty"`
+	SID   string `json:"sid"`
+	Cols  int    `json:"cols"`
+	Rows  int    `json:"rows"`
 }
 
 // Dir returns the directory of the server's socket, log and state.

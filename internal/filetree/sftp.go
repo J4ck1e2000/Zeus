@@ -205,6 +205,12 @@ func runCommand(ctx context.Context, executable, directory string, args []string
 	cmd.Stdin = strings.NewReader(input)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	// An ssh child can keep the inherited stderr open in a grandchild after
+	// sftp itself is gone, which would block Wait until the OS reaped the
+	// connection. WaitDelay bounds that wait, and on unix the process group
+	// kill takes the grandchild down with the cancelled command.
+	cmd.WaitDelay = 3 * time.Second
+	setProcessGroup(cmd)
 	stdout, err := cmd.Output()
 	return stdout, stderr.Bytes(), err
 }

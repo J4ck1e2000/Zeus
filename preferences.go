@@ -271,7 +271,7 @@ func (a *App) settingsAppearance(c *ui.Context, k *colors) {
 					settingsButton(c, k, tr("Reset"), func() { a.setFontSize(defaultFontSize) })
 				})
 			})
-			settingsRow(c, k, tr("Font"), tr("The family of the terminals' text, from the system's fonts or the fonts Zeus ships."), func() {
+			settingsRow(c, k, tr("Font"), tr("The family of the terminals' text, from the system's fonts or the one Zeus ships."), func() {
 				family := prefs.FontFamily
 				if settingsSelect(c, k, &family, tr("Font"), fontFamilies()).Changed() {
 					a.setFontFamily(family)
@@ -333,8 +333,8 @@ func (a *App) sliderLineHeight(slider ui.Element) {
 }
 
 // fontFamilies are the families the font picker offers: those Zeus
-// ships, the system's own, and common monospaced fonts, with whatever
-// the user chose first.
+// ships, the system's own, and common monospaced fonts, sorted, with
+// whatever the user chose first.
 func fontFamilies() []string {
 	list := []string{defaultFontFamily, defaultFontNLFamily}
 	switch runtime.GOOS {
@@ -346,10 +346,14 @@ func fontFamilies() []string {
 		list = append(list, "Monospace", "DejaVu Sans Mono", "Courier New")
 	}
 	list = append(list, "Fira Code", "JetBrains Mono", "Hack", "Source Code Pro")
-	if prefs.FontFamily != "" && !slices.Contains(list, prefs.FontFamily) {
+	list = slices.Compact(slices.Sorted(slices.Values(list)))
+	if prefs.FontFamily != "" {
+		if i := slices.Index(list, prefs.FontFamily); i >= 0 {
+			list = slices.Delete(list, i, i+1)
+		}
 		list = append([]string{prefs.FontFamily}, list...)
 	}
-	return slices.Compact(slices.Sorted(slices.Values(list)))
+	return list
 }
 
 // settingsTerminal is the page of the terminals' behavior.
@@ -457,11 +461,7 @@ func (a *App) settingsShortcuts(c *ui.Context, k *colors) {
 				}
 				a.settingsShortcutCommand(c, k, cmd)
 			}
-			settingsKey := "Ctrl+,"
-			if runtime.GOOS == "darwin" {
-				settingsKey = "⌘,"
-			}
-			settingsShortcutRow(c, k, tr("Settings…"), settingsKey)
+			settingsShortcutRow(c, k, tr("Settings…"), commandKeys("Settings…"))
 		})
 	})
 }
@@ -521,11 +521,14 @@ func (a *App) applyShortcut(cmd *command, mods ui.Modifiers, key ui.Key) {
 		}
 	}
 	s := shortcut{mods, key}
+	accel := menuAccel(mods, key)
 	for _, other := range allCommands {
 		if other == cmd {
 			continue
 		}
-		if other.otherOf() == s || other.accelOf() == menuAccel(mods, key) && menuAccel(mods, key) != "" {
+		// Elsewhere than on macOS the other platform's binding is the
+		// one the command takes, and on macOS it is inert.
+		if (accel != "" && other.accelOf() == accel) || (runtime.GOOS != "darwin" && other.otherOf() == s) {
 			a.recordingErr = fmt.Sprintf(tr("Already used by %s"), other.label())
 			return
 		}
@@ -545,9 +548,21 @@ func settingsShortcutCommands() []*command {
 		&cmdNextTab, &cmdPrevTab, &cmdRenameTab, &cmdPalette, &cmdPalette2,
 		&cmdFind,
 		&cmdFocusLeft, &cmdFocusRight, &cmdFocusUp, &cmdFocusDown,
-		&cmdGrowLeft, &cmdGrowRight, &cmdGrowUp, &cmdGrowDown,
+		&cmdDividerLeft, &cmdDividerRight, &cmdDividerUp, &cmdDividerDown,
 		&cmdClear, &cmdBigger, &cmdSmaller, &cmdActualSize, &cmdEndAll,
 	}
+}
+
+// commandKeys is the keys of a command by its English title, looked up
+// in allCommands: cmdSettings itself would be of a cycle with this
+// view, as the comment on allCommands tells.
+func commandKeys(title string) string {
+	for _, cmd := range allCommands {
+		if cmd.Title == title {
+			return cmd.keysOf()
+		}
+	}
+	return ""
 }
 
 func settingsShortcutRow(c *ui.Context, k *colors, title, keys string) {

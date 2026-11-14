@@ -3,11 +3,13 @@ package zeus
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf16"
 	"unsafe"
 
@@ -92,7 +94,9 @@ func (p *pty) spawn(path string, argv []string, dir string, env []string) error 
 	// A process ignores Ctrl-C when the one that started it did, as the
 	// server does in a process group of its own: Ctrl-C would interrupt
 	// nothing that runs in its consoles.
-	procSetConsoleCtrlHandler.Call(0, 0)
+	if r, _, err := procSetConsoleCtrlHandler.Call(0, 0); r == 0 {
+		log.Printf("zeus: SetConsoleCtrlHandler: %v", err)
+	}
 	var pi windows.ProcessInformation
 	err = windows.CreateProcess(nil, cmdline, nil, nil, false,
 		windows.EXTENDED_STARTUPINFO_PRESENT|windows.CREATE_UNICODE_ENVIRONMENT,
@@ -122,8 +126,20 @@ func (p *pty) close() error {
 	// Before Windows 11 24H2, ClosePseudoConsole waits for its output to be
 	// read, which read goes on doing.
 	go func() {
-		windows.ClosePseudoConsole(console)
-		p.out.Close()
+		done := make(chan struct{})
+		go func() {
+			windows.ClosePseudoConsole(console)
+			p.out.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			// Still waiting for its output: close the pipe, and the read
+			// it waits for ends with it.
+			p.out.Close()
+			<-done
+		}
 	}()
 	return nil
 }
@@ -160,12 +176,30 @@ func (p *pty) wait() int {
 // when a console window closes.
 func (p *pty) hangup() { p.close() }
 
-// kill kills the session's process.
+// kill kills the session's processes: the descendants of its shell
+// first, then the shell, as the process-group kill of Unix does.
 func (p *pty) kill() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	tree := processTree()
+	var walk func(pid uint32)
+	walk = func(pid uint32) {
+		for _, child := range tree.children[pid] {
+			walk(child)
+			terminate(int(child))
+		}
+	}
+	walk(uint32(p.processID))
 	if p.process != 0 {
 		windows.TerminateProcess(p.process, 1)
+	}
+}
+
+// terminate ends a process by its id.
+func terminate(pid int) {
+	if h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid)); err == nil {
+		windows.TerminateProcess(h, 1)
+		windows.CloseHandle(h)
 	}
 }
 
